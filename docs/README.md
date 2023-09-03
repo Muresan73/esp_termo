@@ -5,17 +5,6 @@
 ## Dev Containers
 This repository offers Dev Containers supports for:
 -  [VS Code Dev Containers](https://code.visualstudio.com/docs/remote/containers#_quick-start-open-an-existing-folder-in-a-container)
--  [GitHub Codespaces](https://docs.github.com/en/codespaces/developing-in-codespaces/creating-a-codespace)
-> **Note**
->
-> In [order to use GitHub Codespaces](https://github.com/features/codespaces#faq)
-> the project needs to be published in a GitHub repository and the user needs
-> to be part of the Codespaces beta or have the project under an organization.
-
-If using VS Code or GitHub Codespaces, you can pull the image instead of building it
-from the Dockerfile by selecting the `image` property instead of `build` in
-`.devcontainer/devcontainer.json`. Further customization of the Dev Container can
-be achived, see [.devcontainer.json reference](https://code.visualstudio.com/docs/remote/devcontainerjson-reference).
 
 When using Dev Containers, some tooling to facilitate building, flashing and
 simulating in Wokwi is also added.
@@ -41,11 +30,15 @@ simulating in Wokwi is also added.
 
 ### Flash
 
+#### Macos
+
 > **Note**
 >
-> When using GitHub Codespaces, we need to make the ports
-> public, [see instructions](https://docs.github.com/en/codespaces/developing-in-codespaces/forwarding-ports-in-your-codespace#sharing-a-port).
-
+> Until the espflash is fixed for macos an alternative PR branch need to be build ( at lease on my machine )
+ ```bash
+cargo install --git https://github.com/AVee/espflash --branch add_unix_tight_reset cargo-espflash espflash
+```
+#### Other
 - Terminal approach:
   - Using `flash.sh` script:
 
