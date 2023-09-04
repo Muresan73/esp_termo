@@ -5,14 +5,17 @@ use std::time::Duration;
 
 use anyhow::bail;
 use dotenvy_macro::dotenv;
+use embedded_svc::wifi::AuthMethod;
 use embedded_svc::wifi::ClientConfiguration;
 
-use embedded_svc::wifi::Status;
+use embedded_svc::wifi::Configuration;
 use embedded_svc::wifi::Wifi;
 use esp_idf_hal::i2c;
 use esp_idf_hal::peripherals::Peripherals;
 use esp_idf_hal::prelude::*;
+use esp_idf_svc::eventloop::EspSystemEventLoop;
 use esp_idf_svc::mqtt::client::LwtConfiguration;
+use esp_idf_svc::wifi;
 // If using the `binstart` feature of `esp-idf-sys`, always keep this module imported
 use esp_idf_sys as _;
 
@@ -24,17 +27,50 @@ use esp_idf_svc::nvs::*;
 use esp_idf_svc::wifi::*;
 
 const SSID: &str = dotenv!("SSID");
-const PASS: &str = dotenv!("PASSWORD");
+const PASSWORD: &str = dotenv!("PASSWORD");
 const USERNAME: &str = dotenv!("USERNAME");
 const KEY: &str = dotenv!("KEY");
 
-fn new_mqqt_client() -> Result<EspMqttClient> {
-    // client_id needs to be unique
+pub fn connect_2_wifi() -> Result<()> {
+    let peripherals = Peripherals::take().unwrap();
+    let sys_loop = EspSystemEventLoop::take()?;
+    let nvs = EspDefaultNvsPartition::take()?;
+
+    let mut wifi = BlockingWifi::wrap(
+        EspWifi::new(peripherals.modem, sys_loop.clone(), Some(nvs))?,
+        sys_loop,
+    )?;
+    let wifi_configuration: Configuration = Configuration::Client(ClientConfiguration {
+        ssid: SSID.into(),
+        bssid: None,
+        auth_method: AuthMethod::WPA2Personal,
+        password: PASSWORD.into(),
+        channel: None,
+    });
+
+    wifi.set_configuration(&wifi_configuration)?;
+
+    wifi.start()?;
+    println!("Wifi started");
+
+    wifi.connect()?;
+    println!("Wifi connected");
+
+    wifi.wait_netif_up()?;
+    println!("Wifi netif up");
+
+    Ok(())
+}
+
+pub fn new_mqqt_client() -> Result<EspMqttClient> {
+    connect_2_wifi()?;
+
+    let error_topic = format!("{}/error", USERNAME);
     let conf = MqttClientConfiguration {
         client_id: Some("esp32-sensore"),
         keep_alive_interval: Some(Duration::from_secs(120)),
         lwt: Some(LwtConfiguration {
-            topic: format!("{}/error", USERNAME).as_str(),
+            topic: error_topic.as_str(),
             qos: QoS::AtMostOnce,
             payload: "connection lost".as_bytes(),
             retain: false,
@@ -44,7 +80,7 @@ fn new_mqqt_client() -> Result<EspMqttClient> {
 
     println!("MQTT Conecting ...");
     let client = EspMqttClient::new(
-        format!("mqtt://{}:{}@io.adafruit.com:1883", USERNAME, KEY),
+        format!("mqtt://{}:{}@test.mosquitto.org3", USERNAME, KEY),
         &conf,
         move |msg| match msg {
             Ok(msg) => println!("MQTT Message: {:?}", msg),
@@ -53,22 +89,23 @@ fn new_mqqt_client() -> Result<EspMqttClient> {
     )?;
     println!("MQTT Listening for messages");
 
-    loop {
-        println!("Before publish");
+    // loop {
+    //     println!("Before publish");
 
-        // TODO get values
-        // let temperature = bmp180.get_temperature();
+    //     // TODO get values
+    //     // let temperature = bmp180.get_temperature();
 
-        client.publish(
-            format!("{}/feeds/temperature", USERNAME).as_str(),
-            QoS::AtMostOnce,
-            false,
-            format!("{}", 11).as_bytes(),
-        )?;
-        println!("Published message");
+    //     client.publish(
+    //         format!("{}/feeds/temperature", USERNAME).as_str(),
+    //         QoS::AtMostOnce,
+    //         false,
+    //         format!("{}", 11).as_bytes(),
+    //     )?;
+    //     println!("Published message");
 
-        sleep(Duration::from_millis(60_000));
-    }
+    //     sleep(Duration::from_millis(60_000));
+    // }
+    Ok(client)
 }
 
 // fn wifi(
