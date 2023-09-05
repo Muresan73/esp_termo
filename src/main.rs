@@ -25,30 +25,40 @@ fn main() -> Result<()> {
     let mut mqqt = new_mqqt_client(|msg| {
         println!("Command: {msg}");
     })?;
-    // let mut bme280 = new_bme280(peripherals)?;
-    // http_server::start_server()?;
+    let mut bme280 = new_bme280(
+        peripherals.pins.gpio21,
+        peripherals.pins.gpio22,
+        peripherals.i2c0,
+    )?;
+
+    println!("Ready to broadcast ...");
 
     for _ in 1..5 {
         // 5. This loop initiates measurements, reads values and prints humidity in % and Temperature in °C.
         FreeRtos.delay_ms(100u32);
+        {
+            use std::result::Result::Ok;
+            if let Ok(Some(pressure)) = bme280.read_pressure() {
+                {
+                    mqqt.message(format!("Pressure: {:.2} Pa", pressure))?;
+                }
+            }
+            if let Ok(Some(temperature)) = bme280.read_temperature() {
+                {
+                    mqqt.message(format!("Temperature: {:.2} °C", temperature))?;
+                }
+            }
+            if let Ok(Some(humidity)) = bme280.read_humidity() {
+                {
+                    mqqt.message(format!("Humidity: {:.2} %", humidity))?;
+                }
+            } else {
+                println!("Pressure reading was disabled");
+                println!("BME280 sensore not connected");
+                mqqt.message("BME280 sensor not connected".to_string())?;
+            }
+        }
 
-        mqqt.message("test".into())?;
-
-        // if let Some(humidity) = bme280.read_humidity()? {
-        //     println!("Humidity: {:.2} %", humidity);
-        // } else {
-        //     println!("Humidity reading was disabled");
-        // }
-        // if let Some(temperature) = bme280.read_temperature()? {
-        //     println!("Temperature: {} C", temperature);
-        // } else {
-        //     println!("Temperature reading was disabled");
-        // }
-        // if let Some(pressure) = bme280.read_pressure()? {
-        //     println!("Pressure: {:.2} Pa", pressure);
-        // } else {
-        //     println!("Pressure reading was disabled");
-        // }
         println!("Waiting 5 seconds");
         FreeRtos.delay_ms(5000u32);
     }

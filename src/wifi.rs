@@ -48,5 +48,7 @@ pub fn connect(modem: esp_idf_hal::modem::Modem) -> Result<Box<EspWifi<'static>>
     wifi.wait_netif_up()?;
     println!("Wifi netif up");
 
+    let ip_info = wifi.wifi().sta_netif().get_ip_info()?;
+    println!("Wifi DHCP info: {:?}", ip_info);
     Ok(Box::new(esp_wifi))
 }
