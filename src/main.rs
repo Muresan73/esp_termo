@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Ok, Result};
 use embedded_hal::delay::DelayUs;
 use esp_idf_hal::{delay::FreeRtos, prelude::Peripherals};
 
@@ -22,11 +22,13 @@ fn main() -> Result<()> {
 
     let _wifi = wifi::connect(peripherals.modem)?;
 
-    let mut mqqt = new_mqqt_client()?;
+    let mut mqqt = new_mqqt_client(|msg| {
+        println!("Command: {msg}");
+    })?;
     // let mut bme280 = new_bme280(peripherals)?;
     // http_server::start_server()?;
 
-    loop {
+    for _ in 1..5 {
         // 5. This loop initiates measurements, reads values and prints humidity in % and Temperature in °C.
         FreeRtos.delay_ms(100u32);
 
@@ -50,4 +52,5 @@ fn main() -> Result<()> {
         println!("Waiting 5 seconds");
         FreeRtos.delay_ms(5000u32);
     }
+    Ok(())
 }
