@@ -1,21 +1,22 @@
 use anyhow::Result;
 use bme280_rs::{Bme280, Configuration, Oversampling, SensorMode};
 use esp_idf_hal::delay::Delay;
+use esp_idf_hal::gpio::{InputPin, OutputPin};
+use esp_idf_hal::peripheral::Peripheral;
 use esp_idf_hal::{
-    i2c::{I2cConfig, I2cDriver},
-    peripherals::Peripherals,
+    i2c::{I2c, I2cConfig, I2cDriver},
     prelude::*,
 };
 
-pub fn new_bme280() -> Result<Bme280<I2cDriver<'static>, Delay>, anyhow::Error> {
-    let peripherals = Peripherals::take().unwrap();
-
+pub fn new_bme280<I2C: I2c>(
+    sda: impl Peripheral<P = impl InputPin + OutputPin> + 'static,
+    scl: impl Peripheral<P = impl InputPin + OutputPin> + 'static,
+    i2c_pin: impl Peripheral<P = I2C> + 'static,
+) -> Result<Bme280<I2cDriver<'static>, Delay>, anyhow::Error> {
     // 1. Instanciate the SDA and SCL pins, correct pins are in the training material.
-    let sda = peripherals.pins.gpio21;
-    let scl = peripherals.pins.gpio22;
     // 2. Instanciate the i2c peripheral
     let config = I2cConfig::new().baudrate(400.kHz().into());
-    let i2c = I2cDriver::new(peripherals.i2c0, sda, scl, &config)?;
+    let i2c = I2cDriver::new(i2c_pin, sda, scl, &config)?;
 
     // 3. Create an instance of the bme280 sensor.
     let delay = Delay;
