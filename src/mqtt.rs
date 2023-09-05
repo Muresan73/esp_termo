@@ -1,6 +1,7 @@
 use anyhow::Result;
 use core::str;
 
+use std::str::from_utf8;
 use std::time::Duration;
 
 use dotenvy_macro::dotenv;
@@ -8,40 +9,50 @@ use dotenvy_macro::dotenv;
 use esp_idf_svc::mqtt::client::LwtConfiguration;
 use esp_idf_svc::mqtt::client::MqttProtocolVersion;
 // If using the `binstart` feature of `esp-idf-sys`, always keep this module imported
-use esp_idf_sys as _;
-
-use embedded_svc::mqtt::client::QoS;
+use embedded_svc::mqtt::client::Details::Complete;
+use embedded_svc::mqtt::client::{Event::Received, QoS};
 use esp_idf_svc::mqtt::client::{EspMqttClient, MqttClientConfiguration};
-
+use esp_idf_sys as _;
 const USERNAME: &str = dotenv!("USERNAME");
 const KEY: &str = dotenv!("KEY");
 const MQTT_SERVER: &str = dotenv!("MQTT_SERVER");
 
-pub fn new_mqqt_client() -> Result<EspMqttClient> {
-    let error_topic = format!("error/{}", USERNAME);
+pub fn new_mqqt_client(process_message: impl Fn(String) + Send + 'static) -> Result<EspMqttClient> {
     let conf = MqttClientConfiguration {
         client_id: Some("esp32-sensore"),
         protocol_version: Some(MqttProtocolVersion::V3_1_1),
-
+        client_certificate: None,
+        private_key_password: Some(KEY),
+        username: Some(USERNAME),
         keep_alive_interval: Some(Duration::from_secs(120)),
         lwt: Some(LwtConfiguration {
-            topic: error_topic.as_str(),
-            qos: QoS::AtMostOnce,
+            topic: "status/sensor",
+            qos: QoS::ExactlyOnce,
             payload: "connection lost".as_bytes(),
-            retain: false,
+            retain: true,
         }),
         ..Default::default()
     };
-
     println!("MQTT Conecting ...");
     let mut client = EspMqttClient::new(
         format!("mqtt://{MQTT_SERVER}"),
         &conf,
-        move |msg| match msg {
-            Ok(msg) => println!("MQTT Message: {:?}", msg),
-            Err(e) => println!("MQTT Message ERROR: {}", e),
+        move |message_event| match message_event {
+            Ok(Received(msg)) => match msg.details() {
+                Complete => match from_utf8(msg.data()) {
+                    Ok(text) => process_message(text.to_string()),
+                    Err(e) => println!("Error decoding message: {:?}", e),
+                },
+                _ => println!("Received partial message: {:?}", msg),
+            },
+
+            Ok(_) => println!("Received from MQTT: {:?}", message_event),
+            Err(e) => println!("Error from MQTT: {:?}", e),
         },
     )?;
+
+    client.subscribe("station/cmd", QoS::AtLeastOnce)?;
+
     println!("MQTT Listening for messages");
 
     client.publish(
@@ -50,22 +61,7 @@ pub fn new_mqqt_client() -> Result<EspMqttClient> {
         false,
         "connected".to_string().as_bytes(),
     )?;
-    // loop {
-    //     println!("Before publish");
 
-    //     // TODO get values
-    //     // let temperature = bmp180.get_temperature();
-
-    //     client.publish(
-    //         format!("{}/feeds/temperature", USERNAME).as_str(),
-    //         QoS::AtMostOnce,
-    //         false,
-    //         format!("{}", 11).as_bytes(),
-    //     )?;
-    //     println!("Published message");
-
-    //     sleep(Duration::from_millis(60_000));
-    // }
     Ok(client)
 }
 
