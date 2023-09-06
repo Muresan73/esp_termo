@@ -27,7 +27,9 @@ embedded-svc = "0.25.3"
 esp-idf-hal = "0.41.1"
 esp-idf-svc = "0.46.2"
 esp-idf-sys = { version = "0.33.0", features = ["binstart"] }
+json = "0.12.4"
 lis3dh = "=0.4.2"
+log = "0.4.20"
 shared-bus = "0.2.5"
 shtcx = "=0.11.0"
 
