@@ -1,5 +1,6 @@
 use anyhow::Result;
 use core::str;
+use log::{error, info};
 
 use std::str::from_utf8;
 use std::time::Duration;
@@ -33,7 +34,7 @@ pub fn new_mqqt_client(process_message: impl Fn(String) + Send + 'static) -> Res
         }),
         ..Default::default()
     };
-    println!("MQTT Conecting ...");
+    info!("MQTT Conecting ...");
     let mut client = EspMqttClient::new(
         format!("mqtt://{MQTT_SERVER}"),
         &conf,
@@ -41,19 +42,19 @@ pub fn new_mqqt_client(process_message: impl Fn(String) + Send + 'static) -> Res
             Ok(Received(msg)) => match msg.details() {
                 Complete => match from_utf8(msg.data()) {
                     Ok(text) => process_message(text.to_string()),
-                    Err(e) => println!("Error decoding message: {:?}", e),
+                    Err(e) => error!("Error decoding message: {:?}", e),
                 },
-                _ => println!("Received partial message: {:?}", msg),
+                _ => error!("Received partial message: {:?}", msg),
             },
 
-            Ok(_) => println!("Received from MQTT: {:?}", message_event),
-            Err(e) => println!("Error from MQTT: {:?}", e),
+            Ok(_) => info!("Received from MQTT: {:?}", message_event),
+            Err(e) => error!("Error from MQTT: {:?}", e),
         },
     )?;
 
     client.subscribe("station/cmd", QoS::AtLeastOnce)?;
 
-    println!("MQTT Listening for messages");
+    info!("MQTT Listening for messages");
 
     client.publish(
         "status/sensor",

@@ -7,6 +7,7 @@ use esp_idf_hal::{
     i2c::{I2c, I2cConfig, I2cDriver},
     prelude::*,
 };
+use log::{error, info};
 
 pub fn new_bme280<I2C: I2c>(
     sda: impl Peripheral<P = impl InputPin + OutputPin> + 'static,
@@ -21,27 +22,23 @@ pub fn new_bme280<I2C: I2c>(
     // 3. Create an instance of the bme280 sensor.
     let delay = Delay;
     let mut bme280 = Bme280::new(i2c, delay);
-    let is_init = bme280.init();
+    bme280.init()?;
 
-    if let Err(error) = is_init {
-        println!("{:?}", error)
-    } else {
-        // 4. Read and print the sensor's device ID.
-        match bme280.chip_id() {
-            Ok(id) => {
-                println!("Device ID BME280: {:#02x}", id);
-            }
-            Err(e) => {
-                print!("{:?}", e);
-            }
-        };
+    // 4. Read and print the sensor's device ID.
+    match bme280.chip_id() {
+        Ok(id) => {
+            info!("Device ID BME280: {:#02x}", id);
+        }
+        Err(e) => {
+            error!("{:?}", e);
+        }
+    };
 
-        let configuration = Configuration::default()
-            .with_temperature_oversampling(Oversampling::Oversample1)
-            .with_pressure_oversampling(Oversampling::Oversample1)
-            .with_humidity_oversampling(Oversampling::Oversample1)
-            .with_sensor_mode(SensorMode::Normal);
-        bme280.set_sampling_configuration(configuration)?;
-    }
+    let configuration = Configuration::default()
+        .with_temperature_oversampling(Oversampling::Oversample1)
+        .with_pressure_oversampling(Oversampling::Oversample1)
+        .with_humidity_oversampling(Oversampling::Oversample1)
+        .with_sensor_mode(SensorMode::Normal);
+    bme280.set_sampling_configuration(configuration)?;
     Ok(bme280)
 }
