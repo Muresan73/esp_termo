@@ -1,5 +1,6 @@
 use anyhow::Result;
 use core::str;
+use esp_idf_svc::tls::X509;
 use log::{error, info};
 
 use std::str::from_utf8;
@@ -8,7 +9,6 @@ use std::time::Duration;
 use dotenvy_macro::dotenv;
 
 use esp_idf_svc::mqtt::client::LwtConfiguration;
-use esp_idf_svc::mqtt::client::MqttProtocolVersion;
 // If using the `binstart` feature of `esp-idf-sys`, always keep this module imported
 use embedded_svc::mqtt::client::Details::Complete;
 use embedded_svc::mqtt::client::{Event::Received, QoS};
@@ -17,26 +17,26 @@ use esp_idf_sys as _;
 const USERNAME: &str = dotenv!("USERNAME");
 const KEY: &str = dotenv!("KEY");
 const MQTT_SERVER: &str = dotenv!("MQTT_SERVER");
+const CERT: &[u8] = include_bytes!("../certs/cert.pem");
 
 pub fn new_mqqt_client(process_message: impl Fn(String) + Send + 'static) -> Result<EspMqttClient> {
     let conf = MqttClientConfiguration {
         client_id: Some("esp32-sensore"),
-        protocol_version: Some(MqttProtocolVersion::V3_1_1),
-        client_certificate: None,
-        private_key_password: Some(KEY),
+        server_certificate: Some(X509::pem_until_nul(CERT)),
+        password: Some(KEY),
         username: Some(USERNAME),
         keep_alive_interval: Some(Duration::from_secs(120)),
         lwt: Some(LwtConfiguration {
             topic: "status/sensor",
             qos: QoS::ExactlyOnce,
             payload: "connection lost".as_bytes(),
-            retain: true,
+            retain: false,
         }),
         ..Default::default()
     };
     info!("MQTT Conecting ...");
     let mut client = EspMqttClient::new(
-        format!("mqtt://{MQTT_SERVER}"),
+        format!("mqtts://{MQTT_SERVER}"),
         &conf,
         move |message_event| match message_event {
             Ok(Received(msg)) => match msg.details() {
