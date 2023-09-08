@@ -4,14 +4,14 @@ use esp_idf_hal::{delay::FreeRtos, prelude::Peripherals};
 
 // If using the `binstart` feature of `esp-idf-sys`, always keep this module imported
 use esp_idf_sys as _;
-use json::object;
 use log::{error, info};
+use serde_json::json;
 
 mod mqtt;
 mod sensor;
 mod wifi;
 use crate::{
-    mqtt::{new_mqqt_client, SimpleMqttClient},
+    mqtt::{new_mqqt_client, MqttCommand, SimpleMqttClient},
     sensor::new_bme280,
 };
 
@@ -24,8 +24,9 @@ fn main() -> Result<()> {
 
     let _wifi = wifi::connect(peripherals.modem)?;
 
-    let mut mqqt = new_mqqt_client(|msg| {
-        info!("Command: {msg}");
+    let mut mqqt = new_mqqt_client(|cmd| match cmd {
+        MqttCommand::Water(on_off) => info!("Turn on water: {on_off}"),
+        MqttCommand::Lamp(percent) => info!("Set lamp dim to: {percent}"),
     })?;
     let mut bme280 = new_bme280(
         peripherals.pins.gpio21,
@@ -57,25 +58,25 @@ fn main() -> Result<()> {
         ) {
             // All sensor readings are available and valid
 
-            let json = object! {
-                measurements: [ {
-                    type:"pressure",
-                    value: pressure,
-                    unit: "Pa"
+            let json = json!( {
+                "measurements": [ {
+                    "type":"pressure",
+                    "value": pressure,
+                    "unit": "Pa"
 
                 },
                 {
-                    type:"temperature",
-                    value: temperature,
-                    unit: "°C"
+                    "type":"temperature",
+                    "value": temperature,
+                    "unit": "°C"
                 },
                 {
-                    type:"humidity",
-                    value: humidity,
-                    unit: "%"
+                    "type":"humidity",
+                    "value": humidity,
+                    "unit": "%"
                 }]
-            };
-            mqqt.message(json.dump())?;
+            });
+            mqqt.message(json.to_string())?;
         } else {
             // Handle the case where one or more sensors are not connected or readings are invalid
             error!("Sensors are not connected or readings are invalid");
