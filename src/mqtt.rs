@@ -2,6 +2,7 @@ use anyhow::Result;
 use core::str;
 use esp_idf_svc::tls::X509;
 use log::{error, info};
+use serde_json::Value;
 
 use serde::{Deserialize, Serialize};
 use std::str::{from_utf8, FromStr};
@@ -96,47 +97,48 @@ pub enum MqttCommand {
     Lamp(u8),
 }
 
-#[derive(Debug)]
-pub struct WrongCommandError(String);
-
-impl std::error::Error for WrongCommandError {}
-
-impl std::fmt::Display for WrongCommandError {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "Not recognized command: {}", self.0)
-    }
+#[derive(Debug, thiserror::Error)]
+pub enum CommandError {
+    #[error("Command is not recognized")]
+    WrongCommand(CommandJson),
+    #[error("Command Value is invalid: {0}")]
+    InvalidValue(Value),
+    #[error("Command is not valid JSON: {0}")]
+    JsonParseError(#[from] serde_json::Error),
 }
 
-#[derive(Serialize, Deserialize)]
-struct CommandJson {
+#[derive(Serialize, Deserialize, Debug)]
+pub struct CommandJson {
     name: String,
     value: serde_json::Value,
 }
 
 impl FromStr for MqttCommand {
-    fn from_str(input: &str) -> Result<MqttCommand, WrongCommandError> {
+    fn from_str(input: &str) -> Result<MqttCommand, CommandError> {
         let parsed_command = serde_json::from_str::<CommandJson>(input);
 
         if let Ok(command) = parsed_command {
             match command.name.as_str() {
                 "water" => {
-                    let value = command.value.as_bool().ok_or_else(|| {
-                        WrongCommandError(format!("Wrong value for water command: {}", input))
-                    })?;
+                    let value = command
+                        .value
+                        .as_bool()
+                        .ok_or_else(|| CommandError::InvalidValue(command.value))?;
                     Ok(MqttCommand::Water(value))
                 }
                 "lamp" => {
-                    let value = command.value.as_u64().ok_or_else(|| {
-                        WrongCommandError(format!("Wrong value for lamp command: {}", input))
-                    })?;
+                    let value = command
+                        .value
+                        .as_u64()
+                        .ok_or_else(|| CommandError::InvalidValue(command.value))?;
                     Ok(MqttCommand::Lamp(value as u8))
                 }
-                _ => Err(WrongCommandError(input.to_string())),
+                _ => Err(CommandError::WrongCommand(command)),
             }
         } else {
-            Err(WrongCommandError(input.to_string()))
+            Err(CommandError::JsonParseError(parsed_command.err().unwrap()))
         }
     }
 
-    type Err = WrongCommandError;
+    type Err = CommandError;
 }
