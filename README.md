@@ -20,3 +20,11 @@ echo -e "\0" >> test
 In case of emqx: 
 [Follow instructions](https://www.emqx.io/docs/en/v5.1/network/emqx-mqtt-tls.html#prerequisite)
 
+## Moisture sensor 
+
+The one I have is cheapo version so it need 5V so the timer chip can work correctly
+
+Info is from this beautiful human being testing a bunch of cr@py sensors 
+[Video link](https://youtu.be/IGP38bz-K48?si=4Pe10mfS7SWTy71h)
+
+[Code](https://github.com/yotam5/soil_moisture1.2c6)
