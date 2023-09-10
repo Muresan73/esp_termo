@@ -1,5 +1,9 @@
 use anyhow::Result;
 use core::str;
+use esp_idf_svc::eventloop::{
+    EspEventFetchData, EspEventPostData, EspTypedEventDeserializer, EspTypedEventSerializer,
+    EspTypedEventSource,
+};
 use esp_idf_svc::tls::X509;
 use log::{error, info};
 use serde_json::Value;
@@ -78,6 +82,7 @@ pub fn new_mqqt_client(
 
 pub trait SimpleMqttClient {
     fn message(&mut self, msg: String) -> Result<()>;
+    fn safe_message(&mut self, msg: String);
 }
 
 impl SimpleMqttClient for EspMqttClient {
@@ -85,16 +90,44 @@ impl SimpleMqttClient for EspMqttClient {
         self.publish("feeds/message", QoS::AtMostOnce, false, msg.as_bytes())?;
         Ok(())
     }
+    fn safe_message(&mut self, msg: String) {
+        self.message(msg).unwrap_or_else(|err| {
+            error!("Error sending message: {:?}", err);
+        });
+    }
 }
 
 // ==============
 // MQTT Commands
 // ==============
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub enum MqttCommand {
     Water(bool),
     Lamp(u8),
+    ReadBarometer,
+    ReadSoilMoisture,
+}
+
+impl EspTypedEventSource for MqttCommand {
+    fn source() -> *const core::ffi::c_char {
+        b"MQTT-COMMAND\0".as_ptr() as *const _
+    }
+}
+
+impl EspTypedEventDeserializer<MqttCommand> for MqttCommand {
+    fn deserialize<R>(
+        data: &EspEventFetchData,
+        f: &mut impl for<'a> FnMut(&'a MqttCommand) -> R,
+    ) -> R {
+        f(unsafe { data.as_payload() })
+    }
+}
+
+impl EspTypedEventSerializer<MqttCommand> for MqttCommand {
+    fn serialize<R>(payload: &MqttCommand, f: impl for<'a> FnOnce(&'a EspEventPostData) -> R) -> R {
+        f(&unsafe { EspEventPostData::new(Self::source(), Self::event_id(), payload) })
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -107,36 +140,37 @@ pub enum CommandError {
     JsonParseError(#[from] serde_json::Error),
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct CommandJson {
     name: String,
-    value: serde_json::Value,
+    value: Option<serde_json::Value>,
 }
 
+//
 impl FromStr for MqttCommand {
     fn from_str(input: &str) -> Result<MqttCommand, CommandError> {
         let parsed_command = serde_json::from_str::<CommandJson>(input);
-
-        if let Ok(command) = parsed_command {
-            match command.name.as_str() {
-                "water" => {
-                    let value = command
-                        .value
-                        .as_bool()
-                        .ok_or_else(|| CommandError::InvalidValue(command.value))?;
-                    Ok(MqttCommand::Water(value))
+        info!("Got command: {:?}", parsed_command);
+        match parsed_command {
+            Ok(command) => {
+                let error_cmd = command.clone();
+                match command.name.as_str() {
+                    "water" => {
+                        let value = command.value.ok_or(CommandError::WrongCommand(error_cmd))?;
+                        let value = value.as_bool().ok_or(CommandError::InvalidValue(value))?;
+                        Ok(MqttCommand::Water(value))
+                    }
+                    "lamp" => {
+                        let value = command.value.ok_or(CommandError::WrongCommand(error_cmd))?;
+                        let value = value.as_u64().ok_or(CommandError::InvalidValue(value))?;
+                        Ok(MqttCommand::Lamp(value as u8))
+                    }
+                    "read_barometer" => Ok(MqttCommand::ReadBarometer),
+                    "read_soil_moisture" => Ok(MqttCommand::ReadSoilMoisture),
+                    _ => Err(CommandError::WrongCommand(error_cmd)),
                 }
-                "lamp" => {
-                    let value = command
-                        .value
-                        .as_u64()
-                        .ok_or_else(|| CommandError::InvalidValue(command.value))?;
-                    Ok(MqttCommand::Lamp(value as u8))
-                }
-                _ => Err(CommandError::WrongCommand(command)),
             }
-        } else {
-            Err(CommandError::JsonParseError(parsed_command.err().unwrap()))
+            Err(err) => Err(CommandError::JsonParseError(err)),
         }
     }
 

@@ -1,4 +1,3 @@
-use anyhow::Result;
 use bme280_rs::{Bme280, Configuration, Oversampling, SensorMode};
 use esp_idf_hal::delay::Delay;
 use esp_idf_hal::gpio::{InputPin, OutputPin};
@@ -15,11 +14,19 @@ use esp_idf_hal::{
 use esp_idf_sys::EspError;
 use log::{error, info};
 
+#[derive(Debug, thiserror::Error)]
+pub enum Bme280Error {
+    #[error("i2c driver init failed")]
+    I2cDriverError(#[from] EspError),
+    #[error("sensor init failed")]
+    SensorInitError(#[from] esp_idf_hal::i2c::I2cError),
+}
+
 pub fn new_bme280<I2C: I2c>(
     sda: impl Peripheral<P = impl InputPin + OutputPin> + 'static,
     scl: impl Peripheral<P = impl InputPin + OutputPin> + 'static,
     i2c_pin: impl Peripheral<P = I2C> + 'static,
-) -> Result<Bme280<I2cDriver<'static>, Delay>, anyhow::Error> {
+) -> Result<Bme280<I2cDriver<'static>, Delay>, Bme280Error> {
     // 1. Instanciate the SDA and SCL pins, correct pins are in the training material.
     // 2. Instanciate the i2c peripheral
     let config = I2cConfig::new().baudrate(400.kHz().into());
