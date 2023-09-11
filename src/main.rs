@@ -37,13 +37,13 @@ fn main() -> Result<()> {
     info!("Ready to broadcast ...");
 
     info!("Setup sensors");
-    let mut bme280 = new_bme280(
+    let mut bme280_rs = new_bme280(
         peripherals.pins.gpio21,
         peripherals.pins.gpio22,
         peripherals.i2c0,
     );
 
-    let mut soil_moisture = SoilMoisture::new(peripherals.adc1, peripherals.pins.gpio36);
+    let mut soil_moisture_rs = SoilMoisture::new(peripherals.adc1, peripherals.pins.gpio36);
 
     info!("Setup background event loop");
     // this let variable is necessary so that the Subscription does not get dropped
@@ -53,65 +53,72 @@ fn main() -> Result<()> {
             MqttCommand::Water(on_off) => info!("Turn on water: {on_off}"),
             MqttCommand::Lamp(percent) => info!("Set lamp dim to: {percent}"),
             MqttCommand::ReadSoilMoisture => {
-                if soil_moisture.is_err() {
-                    mqqt.safe_message("Error reading soil".to_string());
-                    return;
-                };
-
-                if let (Ok(perc), Ok(status)) = (
-                    soil_moisture.as_mut().unwrap().get_moisture_precentage(),
-                    soil_moisture.as_mut().unwrap().get_soil_status(),
-                ) {
-                    let json = json!( {
-                        "measurements": [ {
-                            "type":"soil",
-                            "value": perc,
-                            "status": status.to_string(),
-                            "unit": "%"
-                        }]
+                let _ = soil_moisture_rs
+                    .as_mut()
+                    .map(|soil_moisture| {
+                        if let (Ok(perc), Ok(status)) = (
+                            soil_moisture.get_moisture_precentage(),
+                            soil_moisture.get_soil_status(),
+                        ) {
+                            let json = json!( {
+                                "measurements": [ {
+                                    "type":"soil",
+                                    "value": perc,
+                                    "status": status.to_string(),
+                                    "unit": "%"
+                                }]
+                            });
+                            mqqt.safe_message(json.to_string());
+                        } else {
+                            error!("Error reading soil sensor");
+                            mqqt.safe_message("Error reading soil sensor".to_string());
+                        }
+                    })
+                    .map_err(|e| {
+                        error!("Error with soil driver: {:?}", e);
+                        mqqt.safe_message("Soil sensor not connected".to_string());
                     });
-                    mqqt.safe_message(json.to_string());
-                } else {
-                    error!("Soil sensor is not connected");
-                    mqqt.safe_message("Soil sensor is not connected".to_string())
-                }
             }
+
             MqttCommand::ReadBarometer => {
-                if bme280.is_err() {
-                    mqqt.safe_message("Error reading barometer".to_string());
-                    return;
-                };
+                match bme280_rs.as_mut() {
+                    Ok(bme280) => {
+                        if let (Ok(Some(pressure)), Ok(Some(temperature)), Ok(Some(humidity))) = (
+                            bme280.read_pressure(),
+                            bme280.read_temperature(),
+                            bme280.read_humidity(),
+                        ) {
+                            let json = json!( {
+                                "measurements": [ {
+                                    "type":"pressure",
+                                    "value": pressure,
+                                    "unit": "Pa"
 
-                if let (Ok(Some(pressure)), Ok(Some(temperature)), Ok(Some(humidity))) = (
-                    bme280.as_mut().unwrap().read_pressure(),
-                    bme280.as_mut().unwrap().read_temperature(),
-                    bme280.as_mut().unwrap().read_humidity(),
-                ) {
-                    let json = json!( {
-                        "measurements": [ {
-                            "type":"pressure",
-                            "value": pressure,
-                            "unit": "Pa"
-
-                        },
-                        {
-                            "type":"temperature",
-                            "value": temperature,
-                            "unit": "°C"
-                        },
-                        {
-                            "type":"humidity",
-                            "value": humidity,
-                            "unit": "%"
-                        }]
-                    });
-                    mqqt.safe_message(json.to_string());
-                } else {
-                    // Handle the case where one or more sensors are not connected or readings are invalid
-                    error!("Sensors are not connected or readings are invalid");
-                    mqqt.safe_message(
-                        "Sensors are not connected or readings are invalid".to_string(),
-                    );
+                                },
+                                {
+                                    "type":"temperature",
+                                    "value": temperature,
+                                    "unit": "°C"
+                                },
+                                {
+                                    "type":"humidity",
+                                    "value": humidity,
+                                    "unit": "%"
+                                }]
+                            });
+                            mqqt.safe_message(json.to_string());
+                        } else {
+                            // Handle the case where one or more sensors are not connected or readings are invalid
+                            error!("Sensors are not connected or readings are invalid");
+                            mqqt.safe_message(
+                                "Sensors are not connected or readings are invalid".to_string(),
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        error!("Error with bme280 driver: {:?}", e);
+                        mqqt.safe_message("Sensors are not connected".to_string());
+                    }
                 }
             }
         }

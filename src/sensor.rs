@@ -14,6 +14,10 @@ use esp_idf_hal::{
 use esp_idf_sys::EspError;
 use log::{error, info};
 
+// ================
+// BME280 Sensor
+// ================
+
 #[derive(Debug, thiserror::Error)]
 pub enum Bme280Error {
     #[error("i2c driver init failed")]
@@ -56,6 +60,10 @@ pub fn new_bme280<I2C: I2c>(
     Ok(bme280)
 }
 
+trait SensorStatus<T, E> {
+    fn get_status(&mut self) -> Result<T, E>;
+}
+
 // ====================
 // Soil Moisture Sensor
 // ====================
@@ -73,6 +81,7 @@ pub enum SoilStatus {
     Damp,
     Wet,
 }
+
 impl std::fmt::Display for SoilStatus {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
