@@ -13,6 +13,11 @@ use esp_idf_hal::{
 
 use esp_idf_sys::EspError;
 use log::{error, info};
+use serde_json::json;
+
+pub trait MessageAble<T, E> {
+    fn to_json(&mut self) -> Option<String>;
+}
 
 // ================
 // BME280 Sensor
@@ -60,8 +65,36 @@ pub fn new_bme280<I2C: I2c>(
     Ok(bme280)
 }
 
-trait SensorStatus<T, E> {
-    fn get_status(&mut self) -> Result<T, E>;
+impl MessageAble<String, Bme280Error> for Bme280<I2cDriver<'static>, Delay> {
+    fn to_json(&mut self) -> Option<String> {
+        let json_vec: Option<Vec<_>> = [
+            ("pressure", "Pa", self.read_pressure()),
+            ("temperature", "°C", self.read_temperature()),
+            ("humidity", "%", self.read_humidity()),
+        ]
+        .map(|(m_type, unit, measurement)| {
+            if let Ok(Some(msrmnt)) = measurement {
+                Some(json!( {
+                        "type":m_type,
+                        "value": format!("{:.2}",msrmnt),
+                        "unit": unit
+
+                }))
+            } else {
+                log::warn!("Error reading {m_type}");
+                None
+            }
+        })
+        .into_iter()
+        .collect();
+
+        if let Some(json_vec) = json_vec {
+            Some(json!({ "measurements": json_vec }).to_string())
+        } else {
+            error!("Sensors are not connected or readings are invalid");
+            None
+        }
+    }
 }
 
 // ====================
@@ -147,6 +180,44 @@ where
             p if p < 40.0 => Ok(SoilStatus::Optimal),
             p if p < 55.0 => Ok(SoilStatus::Damp),
             _ => Ok(SoilStatus::Wet),
+        }
+    }
+}
+
+impl<T> MessageAble<String, EspError> for SoilMoisture<'_, T>
+where
+    T: ADCPin<Adc = ADC1>,
+{
+    fn to_json(&mut self) -> Option<String> {
+        {
+            let json_vec: Option<Vec<_>> = [(
+                "soil-moisture",
+                "%",
+                self.get_moisture_precentage(),
+                self.get_soil_status(),
+            )]
+            .map(|(m_type, unit, measurement, status)| {
+                if let (Ok(msrmnt), Ok(stts)) = (measurement, status) {
+                    Some(json!( {
+                            "type":m_type,
+                            "value": msrmnt,
+                            "status": stts.to_string(),
+                            "unit": unit
+                    }))
+                } else {
+                    log::warn!("Error reading {m_type}");
+                    None
+                }
+            })
+            .into_iter()
+            .collect();
+
+            if let Some(json_vec) = json_vec {
+                Some(json!({ "measurements": json_vec }).to_string())
+            } else {
+                error!("Sensors are not connected or readings are invalid");
+                None
+            }
         }
     }
 }

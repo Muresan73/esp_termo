@@ -2,7 +2,6 @@ use anyhow::Result;
 use esp_idf_hal::prelude::Peripherals;
 use esp_idf_svc::eventloop::EspBackgroundEventLoop;
 use log::{error, info};
-use serde_json::json;
 use std::result::Result::Ok;
 // If using the `binstart` feature of `esp-idf-sys`, always keep this module imported
 use esp_idf_sys as _;
@@ -12,7 +11,7 @@ mod sensor;
 mod wifi;
 use crate::{
     mqtt::{new_mqqt_client, MqttCommand, SimpleMqttClient},
-    sensor::{new_bme280, SoilMoisture},
+    sensor::{new_bme280, MessageAble, SoilMoisture},
 };
 
 fn main() -> Result<()> {
@@ -52,75 +51,33 @@ fn main() -> Result<()> {
         match message {
             MqttCommand::Water(on_off) => info!("Turn on water: {on_off}"),
             MqttCommand::Lamp(percent) => info!("Set lamp dim to: {percent}"),
-            MqttCommand::ReadSoilMoisture => {
-                let _ = soil_moisture_rs
-                    .as_mut()
-                    .map(|soil_moisture| {
-                        if let (Ok(perc), Ok(status)) = (
-                            soil_moisture.get_moisture_precentage(),
-                            soil_moisture.get_soil_status(),
-                        ) {
-                            let json = json!( {
-                                "measurements": [ {
-                                    "type":"soil",
-                                    "value": perc,
-                                    "status": status.to_string(),
-                                    "unit": "%"
-                                }]
-                            });
-                            mqqt.safe_message(json.to_string());
-                        } else {
-                            error!("Error reading soil sensor");
-                            mqqt.safe_message("Error reading soil sensor".to_string());
-                        }
-                    })
-                    .map_err(|e| {
-                        error!("Error with soil driver: {:?}", e);
-                        mqqt.safe_message("Soil sensor not connected".to_string());
-                    });
-            }
-
-            MqttCommand::ReadBarometer => {
-                match bme280_rs.as_mut() {
-                    Ok(bme280) => {
-                        if let (Ok(Some(pressure)), Ok(Some(temperature)), Ok(Some(humidity))) = (
-                            bme280.read_pressure(),
-                            bme280.read_temperature(),
-                            bme280.read_humidity(),
-                        ) {
-                            let json = json!( {
-                                "measurements": [ {
-                                    "type":"pressure",
-                                    "value": pressure,
-                                    "unit": "Pa"
-
-                                },
-                                {
-                                    "type":"temperature",
-                                    "value": temperature,
-                                    "unit": "°C"
-                                },
-                                {
-                                    "type":"humidity",
-                                    "value": humidity,
-                                    "unit": "%"
-                                }]
-                            });
-                            mqqt.safe_message(json.to_string());
-                        } else {
-                            // Handle the case where one or more sensors are not connected or readings are invalid
-                            error!("Sensors are not connected or readings are invalid");
-                            mqqt.safe_message(
-                                "Sensors are not connected or readings are invalid".to_string(),
-                            );
-                        }
-                    }
-                    Err(e) => {
-                        error!("Error with bme280 driver: {:?}", e);
-                        mqqt.safe_message("Sensors are not connected".to_string());
+            MqttCommand::ReadSoilMoisture => match soil_moisture_rs.as_mut() {
+                Ok(moisture) => {
+                    if let Some(msg) = moisture.to_json() {
+                        mqqt.safe_message(msg)
+                    } else {
+                        mqqt.safe_message("Error reading Soil sensor values".to_string());
                     }
                 }
-            }
+                Err(e) => {
+                    error!("Error with Soil moisture driver: {:?}", e);
+                    mqqt.safe_message("Soil sensor is not connected".to_string());
+                }
+            },
+
+            MqttCommand::ReadBarometer => match bme280_rs.as_mut() {
+                Ok(bme280) => {
+                    if let Some(msg) = bme280.to_json() {
+                        mqqt.safe_message(msg)
+                    } else {
+                        mqqt.safe_message("Error reading Bme280 sensor values".to_string());
+                    }
+                }
+                Err(e) => {
+                    error!("Error with bme280 driver: {:?}", e);
+                    mqqt.safe_message("Bme280 sensor is not connected".to_string());
+                }
+            },
         }
     });
 
