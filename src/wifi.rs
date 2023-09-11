@@ -1,7 +1,7 @@
-use anyhow::Result;
 use core::str;
 use embedded_svc::wifi::Configuration;
 use esp_idf_svc::eventloop::EspSystemEventLoop;
+use esp_idf_sys::EspError;
 use log::info;
 
 use dotenvy_macro::dotenv;
@@ -16,7 +16,7 @@ use esp_idf_svc::wifi::*;
 const SSID: &str = dotenv!("SSID");
 const PASSWORD: &str = dotenv!("PASSWORD");
 
-pub fn connect(modem: esp_idf_hal::modem::Modem) -> Result<Box<EspWifi<'static>>> {
+pub fn connect(modem: esp_idf_hal::modem::Modem) -> Result<Box<EspWifi<'static>>, EspError> {
     let sys_loop = EspSystemEventLoop::take()?;
     let nvs = EspDefaultNvsPartition::take()?;
 

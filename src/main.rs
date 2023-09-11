@@ -2,7 +2,7 @@ use anyhow::Result;
 use esp_idf_hal::prelude::Peripherals;
 use esp_idf_svc::eventloop::EspBackgroundEventLoop;
 use log::{error, info};
-use std::result::Result::Ok;
+use std::{result::Result::Ok, sync::mpsc::channel, thread};
 // If using the `binstart` feature of `esp-idf-sys`, always keep this module imported
 use esp_idf_sys as _;
 
@@ -10,7 +10,7 @@ mod mqtt;
 mod sensor;
 mod wifi;
 use crate::{
-    mqtt::{new_mqqt_client, MqttCommand, SimpleMqttClient},
+    mqtt::{new_mqqt_client, MqttCommand, SimplCommandError, SimpleMqttClient},
     sensor::{new_bme280, MessageAble, SoilMoisture},
 };
 
@@ -25,14 +25,36 @@ fn main() -> Result<()> {
 
     let _wifi = wifi::connect(peripherals.modem)?;
 
-    let mqqt_loop = event_loop.clone();
-    let mut mqqt = new_mqqt_client(move |cmd| {
-        let post = mqqt_loop.post(&cmd, None);
-        if post.is_err() {
-            error!("Error posting to event loop: {:?}", post);
+    let cmd_loop = event_loop.clone();
+    let error_loop = event_loop.clone();
+    let mut mqqt = new_mqqt_client(
+        move |cmd| {
+            let post = cmd_loop.post(&cmd, None);
+            if post.is_err() {
+                error!("Error posting to event loop: {:?}", post);
+            }
+            info!("Added command to the event loop: {:?}", cmd);
+        },
+        move |err| {
+            let err: SimplCommandError = err.into();
+            let post = error_loop.post(&err, None);
+            if post.is_err() {
+                error!("Error posting to event loop: {:?}", post);
+            }
+            info!("Added command to the event loop: {:?}", err);
+        },
+    )?;
+    let (tx, rx) = channel();
+    thread::spawn(move || {
+        while let Ok(msg) = rx.recv() {
+            info!("Sending message to mqqt: {:?}", msg);
+            mqqt.safe_message(msg);
         }
-        info!("Added command to the event loop: {:?}", cmd);
-    })?;
+        info!("MQTT thread stopped")
+    });
+    let tx_cmd = tx.clone();
+    let tx_err = tx.clone();
+
     info!("Ready to broadcast ...");
 
     info!("Setup sensors");
@@ -54,30 +76,44 @@ fn main() -> Result<()> {
             MqttCommand::ReadSoilMoisture => match soil_moisture_rs.as_mut() {
                 Ok(moisture) => {
                     if let Some(msg) = moisture.to_json() {
-                        mqqt.safe_message(msg)
+                        let _ = tx_cmd.send(msg);
                     } else {
-                        mqqt.safe_message("Error reading Soil sensor values".to_string());
+                        let _ = tx_cmd.send("Error reading Soil sensor values".to_string());
                     }
                 }
                 Err(e) => {
                     error!("Error with Soil moisture driver: {:?}", e);
-                    mqqt.safe_message("Soil sensor is not connected".to_string());
+                    let _ = tx_cmd.send("Soil sensor is not connected".to_string());
                 }
             },
 
             MqttCommand::ReadBarometer => match bme280_rs.as_mut() {
                 Ok(bme280) => {
                     if let Some(msg) = bme280.to_json() {
-                        mqqt.safe_message(msg)
+                        let _ = tx_cmd.send(msg);
                     } else {
-                        mqqt.safe_message("Error reading Bme280 sensor values".to_string());
+                        let _ = tx_cmd.send("Error reading Bme280 sensor values".to_string());
                     }
                 }
                 Err(e) => {
                     error!("Error with bme280 driver: {:?}", e);
-                    mqqt.safe_message("Bme280 sensor is not connected".to_string());
+                    let _ = tx_cmd.send("Bme280 sensor is not connected".to_string());
                 }
             },
+        }
+    });
+    let _error_sub = event_loop.subscribe(move |err: &SimplCommandError| match err {
+        SimplCommandError::InvalidValue => {
+            let _ = tx_err.send("Missing or wrong value".to_string());
+        }
+        SimplCommandError::JsonParseError => {
+            let _ = tx_err.send("Invalid Json".to_string());
+        }
+        SimplCommandError::ParseError => {
+            let _ = tx_err.send("Invalid encoding ( utf8 parsing failed )".to_string());
+        }
+        SimplCommandError::WrongCommand => {
+            let _ = tx_err.send("Unknown command".to_string());
         }
     });
 
