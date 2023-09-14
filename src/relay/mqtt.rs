@@ -24,7 +24,7 @@ use esp_idf_sys::{self as _, EspError};
 const USERNAME: &str = dotenv!("USERNAME");
 const KEY: &str = dotenv!("KEY");
 const MQTT_SERVER: &str = dotenv!("MQTT_SERVER");
-const CERT: &[u8] = include_bytes!("../certs/cert.pem");
+const CERT: &[u8] = include_bytes!("../../certs/cert.pem");
 
 pub fn new_mqqt_client(
     process_message: impl Fn(MqttCommand) + Send + 'static,
@@ -120,6 +120,7 @@ pub enum MqttCommand {
     Lamp(u8),
     ReadBarometer,
     ReadSoilMoisture,
+    AllSemorData,
 }
 
 impl EspTypedEventSource for MqttCommand {
@@ -223,6 +224,7 @@ impl FromStr for MqttCommand {
                     }
                     "read_barometer" => Ok(MqttCommand::ReadBarometer),
                     "read_soil_moisture" => Ok(MqttCommand::ReadSoilMoisture),
+                    "all" => Ok(MqttCommand::AllSemorData),
                     _ => Err(CommandError::WrongCommand(error_cmd)),
                 }
             }

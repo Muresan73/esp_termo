@@ -1,19 +1,20 @@
 use anyhow::Result;
 use esp_idf_hal::prelude::Peripherals;
 use esp_idf_svc::eventloop::EspBackgroundEventLoop;
-use log::{error, info};
+use log::{error, info, warn};
 use std::{result::Result::Ok, sync::mpsc::channel, thread};
 // If using the `binstart` feature of `esp-idf-sys`, always keep this module imported
 use esp_idf_sys as _;
 
-mod mqtt;
+mod relay;
 mod sensor;
-mod wifi;
-use crate::{
+mod utils;
+use relay::{
+    discord::discord_webhook,
     mqtt::{new_mqqt_client, MqttCommand, SimplCommandError, SimpleMqttClient},
-    sensor::{new_bme280, MessageAble, SoilMoisture},
 };
-
+use sensor::{bme280::new_bme280, soil::SoilMoisture, MessageAble};
+use utils::wifi;
 fn main() -> Result<()> {
     info!("program started :)");
     esp_idf_sys::link_patches();
@@ -25,6 +26,7 @@ fn main() -> Result<()> {
 
     let _wifi = wifi::connect(peripherals.modem)?;
 
+    discord_webhook()?;
     let cmd_loop = event_loop.clone();
     let error_loop = event_loop.clone();
     let mut mqqt = new_mqqt_client(
@@ -50,7 +52,7 @@ fn main() -> Result<()> {
             info!("Sending message to mqqt: {:?}", msg);
             mqqt.safe_message(msg);
         }
-        info!("MQTT thread stopped")
+        warn!("MQTT thread stopped")
     });
     let tx_cmd = tx.clone();
     let tx_err = tx.clone();
@@ -100,6 +102,25 @@ fn main() -> Result<()> {
                     let _ = tx_cmd.send("Bme280 sensor is not connected".to_string());
                 }
             },
+            MqttCommand::AllSemorData => {
+                let s = soil_moisture_rs.as_mut();
+                let b = bme280_rs.as_mut();
+
+                if let (Ok(moisture), Ok(bme280)) = (s, b) {
+                    if let Some(msg) = moisture.to_json() {
+                        let _ = tx_cmd.send(msg);
+                    } else {
+                        let _ = tx_cmd.send("Error reading Soil sensor values".to_string());
+                    }
+                    if let Some(msg) = bme280.to_json() {
+                        let _ = tx_cmd.send(msg);
+                    } else {
+                        let _ = tx_cmd.send("Error reading Bme280 sensor values".to_string());
+                    }
+                } else {
+                    let _ = tx_cmd.send("Sensors are not connected".to_string());
+                }
+            }
         }
     });
     let _error_sub = event_loop.subscribe(move |err: &SimplCommandError| match err {
