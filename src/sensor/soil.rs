@@ -31,8 +31,14 @@ impl std::fmt::Display for SoilStatus {
         }
     }
 }
-
-type MoistureResult<T> = Result<T, EspError>;
+#[derive(Debug, thiserror::Error)]
+pub enum MoistureError {
+    #[error("Sensor not connected")]
+    SensorNotConnected(),
+    #[error("EspError internal error")]
+    EspError(#[from] EspError),
+}
+type MoistureResult<T> = Result<T, MoistureError>;
 
 pub struct SoilMoisture<'d, T: ADCPin> {
     adc_driver: AdcDriver<'d, ADC1>,
@@ -56,13 +62,16 @@ where
 
     /// Get the raw read of the moisture result, analog read
     pub fn get_raw_moisture(&mut self) -> MoistureResult<u16> {
-        self.adc_driver.read(&mut self.adc_pin)
+        let measurement = self.adc_driver.read(&mut self.adc_pin)?;
+        match measurement {
+            msmnt if msmnt < 1000 => Err(MoistureError::SensorNotConnected()),
+            msmnt => Ok(msmnt),
+        }
     }
 
     /// Get precentage read of the moisture.
     pub fn get_moisture_precentage(&mut self) -> MoistureResult<f32> {
         let raw_read = self.get_raw_moisture()?;
-
         if raw_read > MAX_DRY {
             return Ok(NO_PRECENTAGE);
         } else if raw_read < MAX_WET {

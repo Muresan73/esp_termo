@@ -7,21 +7,13 @@ use embedded_svc::{io::Write, utils::io};
 
 const DISCORD_WEBHOOK: &str = dotenv!("DISCORD");
 
-pub fn discord_webhook() -> anyhow::Result<()> {
+pub fn discord_webhook(content: &str) -> anyhow::Result<()> {
     let mut client = Client::wrap(EspHttpConnection::new(&Configuration {
         crt_bundle_attach: Some(esp_idf_sys::esp_crt_bundle_attach),
         ..Default::default()
     })?);
 
-    let body = r#"{
-            "content": "Hello, World!",
-            "embeds": [
-                {
-                    "title": "Hello, Embed!",
-                    "description": "This is an embedded §message."
-                }
-        ]
-    }"#;
+    let body = format!("{{\"content\": \"{}\"}}", content);
 
     post_request(&mut client, DISCORD_WEBHOOK, body.as_bytes())?;
     Ok(())
