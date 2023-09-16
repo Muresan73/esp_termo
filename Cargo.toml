@@ -18,6 +18,7 @@ opt-level = "z"
 [features]
 default = ["native"]
 native = ["esp-idf-sys/native"]
+mqtt = ["default"]
 
 [dependencies]
 anyhow = "1.0.71"
@@ -35,6 +36,8 @@ serde = "1.0.188"
 serde_json = "1.0.105"
 thiserror = "1.0.48"
 macro_lib = { version = "*", path = "./macro_lib" }
+futures = "0.3.28"
+cfg-if = "1.0.0"
 
 [build-dependencies]
 anyhow = "1.0.71"

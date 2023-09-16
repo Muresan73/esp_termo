@@ -13,7 +13,7 @@ const MOISTURE_RANGE: u16 = MAX_DRY - MAX_WET;
 const FULL_PRECENTAGE: f32 = 100.0;
 const NO_PRECENTAGE: f32 = 0.0;
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub enum SoilStatus {
     Dry,
     Optimal,
@@ -24,7 +24,7 @@ pub enum SoilStatus {
 impl std::fmt::Display for SoilStatus {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
-            SoilStatus::Dry => write!(f, "Dry🔥‼️"),
+            SoilStatus::Dry => write!(f, "Dry🔥"),
             SoilStatus::Optimal => write!(f, "Optimal 💚"),
             SoilStatus::Damp => write!(f, "Damp ⚠️"),
             SoilStatus::Wet => write!(f, "Wet 💦"),
