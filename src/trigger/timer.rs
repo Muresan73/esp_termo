@@ -1,35 +1,36 @@
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
-
+use chrono::{Local, NaiveTime, Timelike};
+use embedded_svc::utils::asyncify::timer::AsyncTimer;
 use embedded_svc::utils::asyncify::Asyncify;
 use esp_idf_svc::timer::EspTimerService;
 use esp_idf_svc::{
     notify::EspNotify,
     sntp::{self},
-    systime::EspSystemTime,
     timer::EspTimer,
 };
 use esp_idf_sys::EspError;
 use log::info;
+use std::time::Duration;
 
-const ONE_DAY: u64 = 86400;
+#[derive(Debug, thiserror::Error)]
+pub enum TimerError {
+    #[error("chrono to std conversion error")]
+    ConversionError,
+    #[error("EspError error")]
+    TimerError(#[from] EspError),
+}
 
-pub async fn get_time(mut callback: impl FnMut() + Send + 'static) -> Result<(), EspError> {
+pub async fn shedule_event(mut callback: impl FnMut() + Send + 'static) -> Result<(), TimerError> {
     update_current_time_async().await;
     info!("SNTP updated");
+    let remaining = get_duration_until_next(8).ok_or(TimerError::ConversionError)?;
 
-    let clock = EspSystemTime {};
-    let now = clock.now();
-    let remaining = get_time_until_8(now.as_secs());
-    let timer_service = EspTimerService::new()?;
-
+    let mut timer = get_timer()?;
     callback();
 
-    let mut timer = timer_service.into_async().timer()?;
-    timer.after(Duration::from_secs(remaining))?.await;
+    timer.after(remaining)?.await;
     callback();
 
-    let stream = timer.every(Duration::from_secs(ONE_DAY))?;
+    let stream = timer.every(chrono::Duration::days(1).to_std().expect("Can't fail"))?;
 
     loop {
         info!("Waiting for timer");
@@ -38,32 +39,54 @@ pub async fn get_time(mut callback: impl FnMut() + Send + 'static) -> Result<(),
     }
 }
 
+pub fn get_timer() -> Result<AsyncTimer<EspTimer>, EspError> {
+    let timer_service = EspTimerService::new()?;
+    let timer = timer_service.into_async().timer()?;
+    Ok(timer)
+}
+
+pub fn showtime() {
+    let now = Local::now();
+
+    let (is_pm, hour) = now.hour12();
+    info!(
+        "The current UTC time is {:02}:{:02}:{:02} {}",
+        hour,
+        now.minute(),
+        now.second(),
+        if is_pm { "PM" } else { "AM" }
+    );
+}
+
+pub fn get_duration_until_next(hour: u32) -> Option<Duration> {
+    use chrono::Duration;
+    let current_time = Local::now().time();
+    let target_time = NaiveTime::from_hms_opt(hour, 0, 0)?;
+
+    let elapsed = if current_time <= target_time {
+        // If current time is before 8 AM, calculate duration until 8 AM of the same day
+        target_time - current_time
+    } else {
+        // If current time is after 8 AM, calculate duration until 8 AM of the next day
+        Duration::days(1) - (current_time - target_time)
+    };
+    info!(
+        "Time until next 8 AM:{}:{}:{} ",
+        elapsed.num_hours(),
+        elapsed.num_minutes() % 60,
+        elapsed.num_seconds() % 60,
+    );
+    elapsed.to_std().ok()
+}
+
 async fn update_current_time_async() {
-    let now = EspSystemTime {}.now();
     let notification = EspNotify::new(&Default::default()).unwrap();
     let notification_a = notification.clone().into_async();
 
-    let sntp = sntp::EspSntp::new_with_callback(&Default::default(), move |now| {
+    let _sntp = sntp::EspSntp::new_with_callback(&Default::default(), move |now| {
         notification.post(&(now.as_secs() as u32)).unwrap();
     });
 
     let mut sub = notification_a.subscribe().unwrap();
-    let val = sub.recv().await;
-}
-
-fn get_time_until_8(current: u64) -> u64 {
-    let today = current % ONE_DAY;
-    let remaining = ONE_DAY as i64 + (28800 - today as i64);
-    remaining as u64
-}
-
-#[cfg(test)]
-mod tests {
-    use crate::trigger::timer::get_time_until_8;
-
-    #[test]
-    fn time() {
-        let result = get_time_until_8(1694894400);
-        assert_eq!(result, 43200);
-    }
+    sub.recv().await;
 }

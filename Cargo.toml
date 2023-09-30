@@ -1,10 +1,10 @@
 [package]
-name = "esp-termo"
-version = "0.1.0"
-authors = ["Gergo <gergely@storekey.com>"]
+authors = ["Gergo"]
 edition = "2021"
+name = "esp-termo"
 resolver = "2"
 rust-version = "1.66"
+version = "0.1.0"
 
 [workspace]
 
@@ -17,27 +17,30 @@ opt-level = "z"
 
 [features]
 default = ["native"]
-native = ["esp-idf-sys/native"]
 mqtt = ["default"]
+native = ["esp-idf-sys/native"]
+sensor = ["default"]
 
 [dependencies]
 anyhow = "1.0.71"
 bme280-rs = "0.1.0"
 dotenvy_macro = "0.15.7"
 
+cfg-if = "1.0.0"
+chrono = { version = "0.4.31", default-features = false, features = ["clock"] }
+edge-executor = { version = "0.3.1", default-features = false, features = ["alloc"] }
 embedded-hal = "=1.0.0-alpha.10"
 embedded-svc = "0.25.3"
-esp-idf-hal = "0.41.1"
-esp-idf-svc = "0.46.2"
+esp-idf-hal = { version = "0.41.1", features = ["edge-executor", "embassy-sync", "critical-section"] }
+esp-idf-svc = { version = "0.46.2", features = ["nightly", "embassy-time-isr-queue"] }
 esp-idf-sys = { version = "0.33.0", features = ["binstart"] }
+futures = "0.3.28"
 lis3dh = "=0.4.2"
 log = "0.4.20"
+macro_lib = { version = "*", path = "./macro_lib" }
 serde = "1.0.188"
 serde_json = "1.0.105"
 thiserror = "1.0.48"
-macro_lib = { version = "*", path = "./macro_lib" }
-futures = "0.3.28"
-cfg-if = "1.0.0"
 
 [build-dependencies]
 anyhow = "1.0.71"

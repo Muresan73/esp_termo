@@ -1,10 +1,11 @@
 use anyhow::Result;
 
-use esp_idf_hal::prelude::Peripherals;
+use edge_executor::Local;
+use esp_idf_hal::{prelude::Peripherals, task::executor::EspExecutor};
 use esp_idf_svc::eventloop::EspBackgroundEventLoop;
-use futures::executor::block_on;
 use log::{error, info};
 use std::result::Result::Ok;
+use std::sync::{Arc, Mutex};
 // If using the `binstart` feature of `esp-idf-sys`, always keep this module imported
 use esp_idf_sys as _;
 
@@ -16,9 +17,12 @@ use relay::{
     discord::discord_webhook,
     mqtt::{new_mqqt_client, Command, SimplCommandError, SimpleMqttClient},
 };
+
 use sensor::{bme280::new_bme280, soil::SoilMoisture, MessageAble};
-use trigger::timer::get_time;
+use trigger::timer::shedule_event;
 use utils::wifi;
+
+use crate::trigger::timer::showtime;
 
 fn main() -> Result<()> {
     info!("program started :)");
@@ -27,23 +31,27 @@ fn main() -> Result<()> {
 
     let peripherals = Peripherals::take().unwrap();
 
-    let _wifi = wifi::connect(peripherals.modem)?;
+    let wifi = wifi::connect(peripherals.modem)?;
+    let wifi_handler = Arc::new(Mutex::new(wifi));
 
-    info!("Setup sensors");
-
-    let mut bme280_rs = new_bme280(
-        peripherals.pins.gpio21,
-        peripherals.pins.gpio22,
-        peripherals.i2c0,
-    );
-
-    let mut soil_moisture = SoilMoisture::new(peripherals.adc1, peripherals.pins.gpio36)?;
-
-    #[cfg(not(feature = "mqtt"))]
+    #[cfg(feature = "sensor")]
     {
+        info!("Setup sensors");
+
+        let mut bme280_rs = new_bme280(
+            peripherals.pins.gpio21,
+            peripherals.pins.gpio22,
+            peripherals.i2c0,
+        );
+
+        let mut soil_moisture = SoilMoisture::new(peripherals.adc1, peripherals.pins.gpio36)?;
+
         let mut bme280 = bme280_rs?;
 
-        let _timer = block_on(get_time(move || {
+        let wifi_handler = wifi_handler.clone();
+        let discord_task = shedule_event(move || {
+            wifi_handler.lock().unwrap().is_connected();
+
             let percent = soil_moisture.get_moisture_precentage();
             let status = soil_moisture.get_soil_status();
             let hum = bme280.read_humidity().unwrap().unwrap();
@@ -91,9 +99,47 @@ fn main() -> Result<()> {
                     let _ = discord_webhook(message);
                 }
             };
-        }));
+        });
     }
 
+    info!("Fun about to begin ...");
+    use std::time::Duration;
+    std::thread::sleep(Duration::from_secs(3));
+
+    let executor: EspExecutor<'_, 8, Local> = EspExecutor::new();
+
+    let task = executor.spawn(shedule_event(showtime))?;
+    let testtask = executor.spawn(async {
+        let mut sleep = trigger::timer::get_timer()?;
+        loop {
+            println!("Hello from a test task!");
+            sleep.after(Duration::from_secs(20))?.await;
+            {
+                let mut wifi = wifi_handler.lock().unwrap();
+                let state = wifi.is_connected()?;
+                println!("Wifi connected: {}", state);
+                wifi.disconnect()?;
+            }
+            sleep.after(Duration::from_secs(10))?.await;
+            {
+                let mut wifi = wifi_handler.lock().unwrap();
+                let state = wifi.is_connected()?;
+                println!("Wifi connected: {}", state);
+                wifi.connect()?;
+            }
+            sleep.after(Duration::from_secs(10))?.await;
+            {
+                let wifi = wifi_handler.lock().unwrap();
+                let state = wifi.is_connected()?;
+                println!("Wifi connected: {}", state);
+            }
+        }
+    })?;
+    let tasks = vec![executor.spawn(task), executor.spawn(testtask)];
+
+    executor.run_tasks(|| true, tasks);
+
+    log::warn!("Tasks completed");
     #[cfg(feature = "mqtt")]
     {
         let mut event_loop = EspBackgroundEventLoop::new(&Default::default())?;
