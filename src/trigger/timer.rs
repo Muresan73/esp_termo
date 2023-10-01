@@ -1,10 +1,11 @@
-use chrono::{Local, NaiveTime, Timelike};
+use chrono::{Local, NaiveTime, Timelike, Utc};
 use embedded_svc::utils::asyncify::timer::AsyncTimer;
 use embedded_svc::utils::asyncify::Asyncify;
 use esp_idf_svc::timer::EspTimerService;
 use esp_idf_svc::{
     notify::EspNotify,
     sntp::{self},
+    systime::EspSystemTime,
     timer::EspTimer,
 };
 use esp_idf_sys::EspError;
@@ -50,7 +51,7 @@ pub fn showtime() {
 
     let (is_pm, hour) = now.hour12();
     info!(
-        "The current UTC time is {:02}:{:02}:{:02} {}",
+        "The current time is {:02}:{:02}:{:02} {}",
         hour,
         now.minute(),
         now.second(),

@@ -1,6 +1,7 @@
 use core::str;
 use embedded_svc::wifi::Configuration;
 use esp_idf_svc::eventloop::EspSystemEventLoop;
+use esp_idf_svc::timer::EspTaskTimerService;
 use esp_idf_sys::EspError;
 use log::info;
 
@@ -16,12 +17,16 @@ use esp_idf_svc::wifi::*;
 const SSID: &str = dotenv!("SSID");
 const PASSWORD: &str = dotenv!("PASSWORD");
 
-pub fn connect(modem: esp_idf_hal::modem::Modem) -> Result<Box<EspWifi<'static>>, EspError> {
+pub async fn connect(
+    modem: esp_idf_hal::modem::Modem,
+) -> Result<AsyncWifi<EspWifi<'static>>, EspError> {
     let sys_loop = EspSystemEventLoop::take()?;
     let nvs = EspDefaultNvsPartition::take()?;
 
-    let mut esp_wifi = EspWifi::new(modem, sys_loop.clone(), Some(nvs))?;
-    let mut wifi = BlockingWifi::wrap(&mut esp_wifi, sys_loop)?;
+    let esp_wifi = EspWifi::new(modem, sys_loop.clone(), Some(nvs))?;
+    let timer_service = EspTaskTimerService::new()?;
+
+    let mut wifi = AsyncWifi::wrap(esp_wifi, sys_loop, timer_service)?;
 
     let wifi_configuration: Configuration = Configuration::Client(ClientConfiguration {
         ssid: SSID.into(),
@@ -35,16 +40,23 @@ pub fn connect(modem: esp_idf_hal::modem::Modem) -> Result<Box<EspWifi<'static>>
 
     wifi.set_configuration(&wifi_configuration)?;
 
-    wifi.start()?;
+    wifi.start().await?;
     info!("Wifi started");
 
-    wifi.connect()?;
+    wifi.connect().await?;
     info!("Wifi connected");
 
-    wifi.wait_netif_up()?;
+    wifi.wait_netif_up().await?;
     info!("Wifi netif up");
 
     let ip_info = wifi.wifi().sta_netif().get_ip_info()?;
     info!("Wifi DHCP info: {:?}", ip_info);
-    Ok(Box::new(esp_wifi))
+
+    Ok(wifi)
+}
+
+pub async fn reconnect(wifi: &mut AsyncWifi<EspWifi<'static>>) -> Result<(), EspError> {
+    wifi.connect().await?;
+    wifi.wait_netif_up().await?;
+    Ok(())
 }

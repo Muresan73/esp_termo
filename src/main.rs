@@ -1,11 +1,12 @@
 use anyhow::Result;
 
+use async_lock::Mutex;
 use edge_executor::Local;
 use esp_idf_hal::{prelude::Peripherals, task::executor::EspExecutor};
 use esp_idf_svc::eventloop::EspBackgroundEventLoop;
 use log::{error, info};
 use std::result::Result::Ok;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 // If using the `binstart` feature of `esp-idf-sys`, always keep this module imported
 use esp_idf_sys as _;
 
@@ -22,7 +23,7 @@ use sensor::{bme280::new_bme280, soil::SoilMoisture, MessageAble};
 use trigger::timer::shedule_event;
 use utils::wifi;
 
-use crate::trigger::timer::showtime;
+use crate::{trigger::timer::showtime, utils::wifi::reconnect};
 
 fn main() -> Result<()> {
     info!("program started :)");
@@ -31,7 +32,7 @@ fn main() -> Result<()> {
 
     let peripherals = Peripherals::take().unwrap();
 
-    let wifi = wifi::connect(peripherals.modem)?;
+    let wifi = futures::executor::block_on(wifi::connect(peripherals.modem))?;
     let wifi_handler = Arc::new(Mutex::new(wifi));
 
     #[cfg(feature = "sensor")]
@@ -103,36 +104,62 @@ fn main() -> Result<()> {
     }
 
     info!("Fun about to begin ...");
+    let mut green_led = esp_idf_hal::gpio::PinDriver::output(peripherals.pins.gpio4)?;
+    let mut red_led = esp_idf_hal::gpio::PinDriver::output(peripherals.pins.gpio0)?;
+
     use std::time::Duration;
     std::thread::sleep(Duration::from_secs(3));
 
     let executor: EspExecutor<'_, 8, Local> = EspExecutor::new();
 
     let task = executor.spawn(shedule_event(showtime))?;
-    let testtask = executor.spawn(async {
+    let testtask = executor.spawn_local(async {
         let mut sleep = trigger::timer::get_timer()?;
+
+        for _ in 0..3 {
+            green_led.set_high()?;
+            red_led.set_high()?;
+            sleep.after(Duration::from_secs(1))?.await;
+            green_led.set_low()?;
+            red_led.set_low()?;
+            sleep.after(Duration::from_secs(1))?.await;
+        }
+
+        let mut net_staus = |net_staus: bool| {
+            if net_staus {
+                green_led.set_high();
+                red_led.set_low();
+            } else {
+                green_led.set_low();
+                red_led.set_high();
+            }
+        };
+
         loop {
-            println!("Hello from a test task!");
-            sleep.after(Duration::from_secs(20))?.await;
             {
-                let mut wifi = wifi_handler.lock().unwrap();
-                let state = wifi.is_connected()?;
-                println!("Wifi connected: {}", state);
-                wifi.disconnect()?;
+                let wifi = wifi_handler.lock().await;
+                net_staus(wifi.is_connected()?);
+                net_staus(true);
             }
-            sleep.after(Duration::from_secs(10))?.await;
+
+            let res = discord_webhook(String::from("timout"));
+            if res.is_err() {
+                net_staus(false);
+            }
+
+            showtime();
             {
-                let mut wifi = wifi_handler.lock().unwrap();
-                let state = wifi.is_connected()?;
-                println!("Wifi connected: {}", state);
-                wifi.connect()?;
+                let mut wifi = wifi_handler.lock().await;
+                wifi.disconnect().await?;
+                net_staus(false);
+                utils::power::enter_light_sleep(chrono::Duration::hours(1).to_std().unwrap());
+                reconnect(&mut wifi).await?;
+                net_staus(wifi.is_connected()?);
+                info!("Wifi connected");
+                sleep.after(Duration::from_secs(2))?.await;
             }
-            sleep.after(Duration::from_secs(10))?.await;
-            {
-                let wifi = wifi_handler.lock().unwrap();
-                let state = wifi.is_connected()?;
-                println!("Wifi connected: {}", state);
-            }
+
+            showtime();
         }
     })?;
     let tasks = vec![executor.spawn(task), executor.spawn(testtask)];
