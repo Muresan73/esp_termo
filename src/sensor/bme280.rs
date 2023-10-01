@@ -1,6 +1,9 @@
+use std::sync::{Arc, Mutex};
+
 use bme280_rs::{Bme280, Configuration, Oversampling, SensorMode};
 use esp_idf_hal::delay::Delay;
 use esp_idf_hal::gpio::{InputPin, OutputPin};
+use esp_idf_hal::i2c::I2cError;
 use esp_idf_hal::peripheral::Peripheral;
 use esp_idf_hal::{
     i2c::{I2c, I2cConfig, I2cDriver},
@@ -15,9 +18,11 @@ use super::*;
 #[derive(Debug, thiserror::Error)]
 pub enum Bme280Error {
     #[error("i2c driver init failed")]
-    I2cDriverError(#[from] EspError),
+    I2cDriver(#[from] EspError),
     #[error("sensor init failed")]
-    SensorInitError(#[from] esp_idf_hal::i2c::I2cError),
+    SensorInit(#[from] I2cError),
+    #[error("sensor not connected")]
+    SensorNotConnected(),
 }
 
 pub fn new_bme280<I2C: I2c>(
@@ -54,63 +59,202 @@ pub fn new_bme280<I2C: I2c>(
     Ok(bme280)
 }
 
-pub trait Bme280Extention {
-    fn read_temperature_status(&mut self) -> Option<String>;
-    fn read_pressure_status(&mut self) -> Option<String>;
-    fn read_humidity_status(&mut self) -> Option<String>;
+pub fn get_bme280_sensors(
+    bme280_rs: Result<Bme280<I2cDriver<'static>, Delay>, Bme280Error>,
+) -> (Bme280TempSensor, Bme280HumiditySensor, Bme280PressureSensor) {
+    match bme280_rs {
+        Ok(bme280_origin) => {
+            let bme280 = Arc::new(Mutex::new(bme280_origin));
+
+            let bme280_temp_sensor = Bme280TempSensor {
+                bme280: Some(bme280.clone()),
+                ..Default::default()
+            };
+            let bme280_humidity_sensor = Bme280HumiditySensor {
+                bme280: Some(bme280.clone()),
+                ..Default::default()
+            };
+            let bme280_pressure_sensor = Bme280PressureSensor {
+                bme280: Some(bme280.clone()),
+                ..Default::default()
+            };
+            (
+                bme280_temp_sensor,
+                bme280_humidity_sensor,
+                bme280_pressure_sensor,
+            )
+        }
+        Err(_) => (
+            Bme280TempSensor::default(),
+            Bme280HumiditySensor::default(),
+            Bme280PressureSensor::default(),
+        ),
+    }
 }
 
-impl Bme280Extention for Bme280<I2cDriver<'static>, Delay> {
-    fn read_temperature_status(&mut self) -> Option<String> {
-        let temp = self.read_temperature().ok()??;
+pub struct Bme280TempSensor {
+    bme280: Option<Arc<Mutex<Bme280<I2cDriver<'static>, Delay>>>>,
+    unit: &'static str,
+    name: &'static str,
+}
+impl Default for Bme280TempSensor {
+    fn default() -> Self {
+        Self {
+            bme280: None,
+            unit: "°C",
+            name: "temperature",
+        }
+    }
+}
+pub enum TempStatus {
+    Freezing,
+    Cold,
+    Optimal,
+    Hot,
+}
+
+impl Sensor for Bme280TempSensor {
+    type Error = Bme280Error;
+    type Status = TempStatus;
+
+    fn get_measurment(&mut self) -> Result<f32, Self::Error> {
+        let bme280 = self
+            .bme280
+            .as_mut()
+            .ok_or(Self::Error::SensorNotConnected())?;
+
+        let mut bme280 = bme280.lock().or(Err(Self::Error::SensorNotConnected()))?;
+
+        bme280
+            .read_temperature()?
+            .ok_or(Self::Error::SensorNotConnected())
+    }
+
+    fn get_status(&mut self) -> Result<Self::Status, Self::Error> {
+        let temp = self.get_measurment()?;
         match temp {
-            t if t < 0.0 => Some("Freezing".to_string()),
-            t if t < 18.0 => Some("Cold".to_string()),
-            t if t < 25.0 => Some("Optimal".to_string()),
-            _ => Some("Hot".to_string()),
+            t if t < 0.0 => Ok(TempStatus::Freezing),
+            t if t < 18.0 => Ok(TempStatus::Cold),
+            t if t < 25.0 => Ok(TempStatus::Optimal),
+            _ => Ok(TempStatus::Hot),
         }
     }
-    fn read_humidity_status(&mut self) -> Option<String> {
-        let humidity = self.read_humidity().ok()??;
-        match humidity {
-            h if h < 30.0 => Some("Dry".to_string()),
-            h if h < 50.0 => Some("Optimal".to_string()),
-            h if h < 70.0 => Some("Moist".to_string()),
-            _ => Some("Wet".to_string()),
-        }
+
+    fn get_unit(&self) -> &str {
+        self.unit
     }
-    fn read_pressure_status(&mut self) -> Option<String> {
-        let pressure = self.read_pressure().ok()??;
-        match pressure {
-            p if p < 1000.0 => Some("Low".to_string()),
-            p if p < 1013.0 => Some("Optimal".to_string()),
-            _ => Some("High".to_string()),
-        }
+
+    fn get_name(&self) -> &str {
+        self.name
     }
 }
 
-impl MessageAble<String> for Bme280<I2cDriver<'static>, Delay> {
-    fn get_measurment_vec(&mut self) -> Vec<(&str, &str, Option<f32>, Option<String>)> {
-        [
-            (
-                "temperature",
-                "°C",
-                self.read_temperature().unwrap_or(None),
-                self.read_temperature_status(),
-            ),
-            (
-                "humidity",
-                "%",
-                self.read_humidity().unwrap_or(None),
-                self.read_humidity_status(),
-            ),
-            (
-                "pressure",
-                "hPa",
-                self.read_pressure().unwrap_or(None),
-                self.read_pressure_status(),
-            ),
-        ]
-        .to_vec()
+pub struct Bme280HumiditySensor {
+    bme280: Option<Arc<Mutex<Bme280<I2cDriver<'static>, Delay>>>>,
+    unit: &'static str,
+    name: &'static str,
+}
+impl Default for Bme280HumiditySensor {
+    fn default() -> Self {
+        Self {
+            bme280: None,
+            unit: "%",
+            name: "humidity",
+        }
+    }
+}
+pub enum HumidityStatus {
+    Dry,
+    Optimal,
+    Moist,
+    Wet,
+}
+impl Sensor for Bme280HumiditySensor {
+    type Error = Bme280Error;
+    type Status = HumidityStatus;
+
+    fn get_measurment(&mut self) -> Result<f32, Self::Error> {
+        let bme280 = self
+            .bme280
+            .as_mut()
+            .ok_or(Self::Error::SensorNotConnected())?;
+
+        let mut bme280 = bme280.lock().or(Err(Self::Error::SensorNotConnected()))?;
+
+        bme280
+            .read_humidity()?
+            .ok_or(Self::Error::SensorNotConnected())
+    }
+
+    fn get_status(&mut self) -> Result<Self::Status, Self::Error> {
+        let humidity = self.get_measurment()?;
+        match humidity {
+            h if h < 30.0 => Ok(HumidityStatus::Dry),
+            h if h < 50.0 => Ok(HumidityStatus::Optimal),
+            h if h < 70.0 => Ok(HumidityStatus::Moist),
+            _ => Ok(HumidityStatus::Wet),
+        }
+    }
+
+    fn get_unit(&self) -> &str {
+        self.unit
+    }
+
+    fn get_name(&self) -> &str {
+        self.name
+    }
+}
+
+pub struct Bme280PressureSensor {
+    bme280: Option<Arc<Mutex<Bme280<I2cDriver<'static>, Delay>>>>,
+    unit: &'static str,
+    name: &'static str,
+}
+impl Default for Bme280PressureSensor {
+    fn default() -> Self {
+        Self {
+            bme280: None,
+            unit: "hPa",
+            name: "pressure",
+        }
+    }
+}
+pub enum PressureStatus {
+    Low,
+    Optimal,
+    High,
+}
+impl Sensor for Bme280PressureSensor {
+    type Error = Bme280Error;
+    type Status = PressureStatus;
+
+    fn get_measurment(&mut self) -> Result<f32, Self::Error> {
+        let bme280 = self
+            .bme280
+            .as_mut()
+            .ok_or(Self::Error::SensorNotConnected())?;
+
+        let mut bme280 = bme280.lock().or(Err(Self::Error::SensorNotConnected()))?;
+
+        bme280
+            .read_pressure()?
+            .ok_or(Self::Error::SensorNotConnected())
+    }
+
+    fn get_status(&mut self) -> Result<Self::Status, Self::Error> {
+        let pressure = self.get_measurment()?;
+        match pressure {
+            p if p < 1000.0 => Ok(PressureStatus::Low),
+            p if p < 1013.0 => Ok(PressureStatus::Optimal),
+            _ => Ok(PressureStatus::High),
+        }
+    }
+
+    fn get_unit(&self) -> &str {
+        self.unit
+    }
+
+    fn get_name(&self) -> &str {
+        self.name
     }
 }

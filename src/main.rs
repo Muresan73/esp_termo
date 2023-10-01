@@ -49,9 +49,9 @@ fn main() -> Result<()> {
 
         let mut bme280 = bme280_rs?;
 
-        let wifi_handler = wifi_handler.clone();
+        let discord_wifi_handler = wifi_handler.clone();
         let discord_task = shedule_event(move || {
-            wifi_handler.lock().unwrap().is_connected();
+            discord_wifi_handler.lock().unwrap().is_connected();
 
             let percent = soil_moisture.get_moisture_precentage();
             let status = soil_moisture.get_soil_status();

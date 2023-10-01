@@ -99,17 +99,28 @@ where
     }
 }
 
-impl<T> MessageAble<SoilStatus> for SoilMoisture<'_, T>
+impl<T: ADCPin> Sensor for SoilMoisture<'_, T>
 where
     T: ADCPin<Adc = ADC1>,
 {
-    fn get_measurment_vec(&mut self) -> Vec<(&str, &str, Option<f32>, Option<SoilStatus>)> {
-        [(
-            "soil-moisture",
-            "%",
-            self.get_moisture_precentage().ok(),
-            self.get_soil_status(),
-        )]
-        .to_vec()
+    type Error = MoistureError;
+
+    type Status = SoilStatus;
+
+    fn get_unit(&self) -> &str {
+        "%"
+    }
+
+    fn get_name(&self) -> &str {
+        "soil moisture"
+    }
+
+    fn get_measurment(&mut self) -> Result<f32, Self::Error> {
+        self.get_moisture_precentage()
+    }
+
+    fn get_status(&mut self) -> Result<Self::Status, Self::Error> {
+        self.get_soil_status()
+            .ok_or(MoistureError::SensorNotConnected())
     }
 }

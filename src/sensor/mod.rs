@@ -1,41 +1,46 @@
+use std::fmt::Display;
+
 use log::error;
-use serde_json::json;
+use serde_json::{json, Value};
 
 pub mod bme280;
 pub mod soil;
 
-pub trait MessageAble<T>
-where
-    T: std::fmt::Display,
-{
-    fn to_json(&mut self) -> Option<String> {
-        {
-            let json_vec: Option<Vec<_>> = self
-                .get_measurment_vec()
-                .iter()
-                .map(|(m_type, unit, measurement, status)| {
-                    if let (Some(msrmnt), Some(stts)) = (measurement, status) {
-                        Some(json!( {
-                                "type":m_type,
-                                "value": msrmnt,
-                                "status": stts.to_string(),
-                                "unit": unit
-                        }))
-                    } else {
-                        log::warn!("Error reading {m_type}");
-                        None
-                    }
-                })
-                .collect();
+pub trait MessageAble {
+    fn to_json(&mut self) -> Value;
+}
 
-            if let Some(json_vec) = json_vec {
-                Some(json!({ "measurements": json_vec }).to_string())
-            } else {
-                error!("Sensors are not connected or readings are invalid");
-                None
-            }
+pub trait Sensor {
+    type Error;
+    type Status;
+
+    fn get_unit(&self) -> &str;
+    fn get_name(&self) -> &str;
+
+    fn get_measurment(&mut self) -> Result<f32, Self::Error>;
+    fn get_status(&mut self) -> Result<Self::Status, Self::Error>;
+}
+
+impl<ST, E, S> MessageAble for S
+where
+    ST: Display,
+    E: std::fmt::Debug,
+    S: Sensor<Error = E, Status = ST>,
+{
+    fn to_json(&mut self) -> Value {
+        if let (Ok(stat), Ok(msrmnt)) = (self.get_status(), self.get_measurment()) {
+            json!( {
+                    "type":self.get_name(),
+                    "value": msrmnt,
+                    "status": stat.to_string(),
+                    "unit": self.get_unit()
+            })
+        } else {
+            json!( {
+                    "type":self.get_name(),
+                    "value": self.get_measurment().unwrap(),
+                    "status": "Not connected",
+            })
         }
     }
-
-    fn get_measurment_vec(&mut self) -> Vec<(&str, &str, Option<f32>, Option<T>)>;
 }
