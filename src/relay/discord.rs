@@ -1,30 +1,32 @@
 use dotenvy_macro::dotenv;
-use embedded_svc::http::client::Client;
-use esp_idf_svc::http::client::*;
+use embedded_svc::http::client::asynch::Client;
+use embedded_svc::http::client::asynch::*;
+use esp_idf_svc::http::client::{Configuration, EspHttpConnection};
 use log::{error, info};
 
-use embedded_svc::{io::Write, utils::io};
+use embedded_svc::io::asynch::{Read, Write};
 
 const DISCORD_WEBHOOK: &str = dotenv!("DISCORD");
 
-pub fn discord_webhook(content: String) -> anyhow::Result<()> {
-    let mut client = Client::wrap(EspHttpConnection::new(&Configuration {
+pub async fn discord_webhook(content: String) -> anyhow::Result<()> {
+    let connection = EspHttpConnection::new(&Configuration {
         crt_bundle_attach: Some(esp_idf_sys::esp_crt_bundle_attach),
         ..Default::default()
-    })?);
+    })?;
+    let unblocking_connection = TrivialUnblockingConnection::new(connection);
+    let mut client = Client::wrap(unblocking_connection);
 
+    // Prepare payload
     let body = format!("{{\"content\": \"{}\"}}", content);
-    post_request(&mut client, DISCORD_WEBHOOK, body.as_bytes())?;
+    post_request(&mut client, DISCORD_WEBHOOK, body.as_bytes()).await?;
     Ok(())
 }
 
-fn post_request(
-    client: &mut Client<EspHttpConnection>,
+async fn post_request<C: embedded_svc::http::client::Connection>(
+    client: &mut Client<TrivialUnblockingConnection<C>>,
     url: &str,
     payload: &[u8],
-) -> anyhow::Result<()> {
-    // Prepare payload
-
+) -> Result<(), C::Error> {
     // Prepare headers and URL
     let content_length_header = format!("{}", payload.len());
     let headers = [
@@ -33,19 +35,19 @@ fn post_request(
         ("content-length", &*content_length_header),
     ];
 
-    // Send request
-    let mut request = client.post(url, &headers)?;
-    request.write_all(payload)?;
-    request.flush()?;
+    let mut request = client.post(url, &headers).await?;
+    request.write_all(payload).await?;
+    request.flush().await?;
     info!("-> POST {}", url);
-    let mut response = request.submit()?;
+    let mut response = request.submit().await?;
 
-    // Process response
+    info!("Process response");
     let status = response.status();
     info!("<- {}", status);
     let (_headers, mut body) = response.split();
     let mut buf = [0u8; 1024];
-    let bytes_read = io::try_read_full(&mut body, &mut buf).map_err(|e| e.0)?;
+    let bytes_read = body.read(&mut buf).await?;
+
     info!("Read {} bytes", bytes_read);
     match std::str::from_utf8(&buf[0..bytes_read]) {
         Ok(body_string) => info!(
@@ -55,9 +57,6 @@ fn post_request(
         ),
         Err(e) => error!("Error decoding response body: {}", e),
     };
-
-    // Drain the remaining response bytes
-    while body.read(&mut buf)? > 0 {}
 
     Ok(())
 }

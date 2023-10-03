@@ -142,7 +142,7 @@ fn main() -> Result<()> {
                 net_staus(true);
             }
 
-            let res = discord_webhook(String::from("timout"));
+            let res = discord_webhook(String::from("timout")).await;
             if res.is_err() {
                 net_staus(false);
             }
