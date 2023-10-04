@@ -9,9 +9,9 @@ use esp_idf_hal::{
     i2c::{I2c, I2cConfig, I2cDriver},
     prelude::*,
 };
-
 use esp_idf_sys::EspError;
 use log::{error, info};
+use parse_display::Display;
 
 use super::*;
 
@@ -106,6 +106,7 @@ impl Default for Bme280TempSensor {
         }
     }
 }
+#[derive(Debug, Display)]
 pub enum TempStatus {
     Freezing,
     Cold,
@@ -163,6 +164,7 @@ impl Default for Bme280HumiditySensor {
         }
     }
 }
+#[derive(Debug, Display)]
 pub enum HumidityStatus {
     Dry,
     Optimal,
@@ -219,6 +221,7 @@ impl Default for Bme280PressureSensor {
         }
     }
 }
+#[derive(Debug, Display)]
 pub enum PressureStatus {
     Low,
     Optimal,

@@ -17,7 +17,7 @@ use esp_idf_svc::wifi::*;
 const SSID: &str = dotenv!("SSID");
 const PASSWORD: &str = dotenv!("PASSWORD");
 
-pub async fn connect(
+async fn connect(
     modem: esp_idf_hal::modem::Modem,
 ) -> Result<AsyncWifi<EspWifi<'static>>, EspError> {
     let sys_loop = EspSystemEventLoop::take()?;
@@ -55,8 +55,33 @@ pub async fn connect(
     Ok(wifi)
 }
 
-pub async fn reconnect(wifi: &mut AsyncWifi<EspWifi<'static>>) -> Result<(), EspError> {
-    wifi.connect().await?;
-    wifi.wait_netif_up().await?;
-    Ok(())
+use async_watch::*;
+pub struct WifiRelay {
+    wifi: AsyncWifi<EspWifi<'static>>,
+    tx: Sender<bool>,
+    rx: Receiver<bool>,
+}
+
+impl WifiRelay {
+    pub async fn new(modem: esp_idf_hal::modem::Modem) -> Result<Self, EspError> {
+        let wifi = connect(modem).await?;
+        let (tx, rx) = async_watch::channel(false);
+        Ok(Self { wifi, tx, rx })
+    }
+    pub fn get_reciver(&mut self) -> Receiver<bool> {
+        self.rx.clone()
+    }
+
+    pub async fn disconnect(&mut self) -> Result<(), EspError> {
+        self.wifi.disconnect().await?;
+        self.tx.send(false).ok();
+        Ok(())
+    }
+
+    pub async fn reconnect(&mut self) -> Result<(), EspError> {
+        self.wifi.connect().await?;
+        self.wifi.wait_netif_up().await?;
+        self.tx.send(true).ok();
+        Ok(())
+    }
 }

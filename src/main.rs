@@ -1,11 +1,7 @@
-use anyhow::Result;
-
 use async_lock::Mutex;
 use edge_executor::Local;
 use esp_idf_hal::{prelude::Peripherals, task::executor::EspExecutor};
-use esp_idf_svc::eventloop::EspBackgroundEventLoop;
-use log::{error, info};
-use std::result::Result::Ok;
+use log::{info, warn};
 use std::sync::Arc;
 // If using the `binstart` feature of `esp-idf-sys`, always keep this module imported
 use esp_idf_sys as _;
@@ -19,89 +15,36 @@ use relay::{
     mqtt::{new_mqqt_client, Command, SimplCommandError, SimpleMqttClient},
 };
 
-use sensor::{bme280::new_bme280, soil::SoilMoisture, MessageAble};
+use sensor::{bme280::new_bme280, soil::SoilMoisture};
 use trigger::timer::shedule_event;
-use utils::wifi;
 
-use crate::{trigger::timer::showtime, utils::wifi::reconnect};
+use crate::{
+    sensor::{bme280::get_bme280_sensors, Sensor},
+    utils::wifi::WifiRelay,
+};
 
-fn main() -> Result<()> {
+fn main() -> anyhow::Result<()> {
     info!("program started :)");
     esp_idf_sys::link_patches();
     esp_idf_svc::log::EspLogger::initialize_default();
 
     let peripherals = Peripherals::take().unwrap();
 
-    let wifi = futures::executor::block_on(wifi::connect(peripherals.modem))?;
+    let wifi = futures::executor::block_on(WifiRelay::new(peripherals.modem))?;
     let wifi_handler = Arc::new(Mutex::new(wifi));
 
-    #[cfg(feature = "sensor")]
-    {
-        info!("Setup sensors");
+    info!("Setup sensors");
 
-        let mut bme280_rs = new_bme280(
-            peripherals.pins.gpio21,
-            peripherals.pins.gpio22,
-            peripherals.i2c0,
-        );
+    let bme280_i2c = new_bme280(
+        peripherals.pins.gpio21,
+        peripherals.pins.gpio22,
+        peripherals.i2c0,
+    );
 
-        let mut soil_moisture = SoilMoisture::new(peripherals.adc1, peripherals.pins.gpio36)?;
+    let (mut temp_sensor, mut hum_sensor, mut _bar_sensor) = get_bme280_sensors(bme280_i2c);
+    let mut soil_sensor = SoilMoisture::new(peripherals.adc1, peripherals.pins.gpio36)?;
 
-        let mut bme280 = bme280_rs?;
-
-        let discord_wifi_handler = wifi_handler.clone();
-        let discord_task = shedule_event(move || {
-            discord_wifi_handler.lock().unwrap().is_connected();
-
-            let percent = soil_moisture.get_moisture_precentage();
-            let status = soil_moisture.get_soil_status();
-            let hum = bme280.read_humidity().unwrap().unwrap();
-            let temp = bme280.read_temperature().unwrap().unwrap();
-            match (status, percent) {
-                (Some(status), Ok(percent)) if status == sensor::soil::SoilStatus::Dry => {
-                    let message = format!(
-                        r#"
-                        Warning!!! :warning:
-                        Plants need to be watered!
-                        > Soil moisture: **{percent:.1}%**
-                        > Soil moisture status: **{status}**
-                        > Temperature: **{temp:.1}°C**
-                        > Humidity: **{hum:.1}%**
-                        "#
-                    )
-                    .replace('\n', r"\n")
-                    .replace("  ", "");
-                    let _ = discord_webhook(message);
-                }
-                (Some(status), Ok(percent)) => {
-                    let message = format!(
-                        r#"
-                        Good morning! :sun_with_face:
-                        Here is the daily report:
-                        > Soil moisture: {percent:.1}%
-                        > Soil moisture status: **{status}**
-                        > Temperature: **{temp:.1}°C**
-                        > Humidity: **{hum:.1}%**
-                        "#
-                    )
-                    .replace('\n', r"\n")
-                    .replace("  ", "");
-                    let _ = discord_webhook(message);
-                }
-                _ => {
-                    let message = format!(
-                        r#"
-                        Bit of a problem! :warning:
-                        Sensore not connected
-                        "#
-                    )
-                    .replace('\n', r"\n")
-                    .replace("  ", "");
-                    let _ = discord_webhook(message);
-                }
-            };
-        });
-    }
+    let discord_wifi_handler = wifi_handler.clone();
 
     info!("Fun about to begin ...");
     let mut green_led = esp_idf_hal::gpio::PinDriver::output(peripherals.pins.gpio4)?;
@@ -110,59 +53,89 @@ fn main() -> Result<()> {
     use std::time::Duration;
     std::thread::sleep(Duration::from_secs(3));
 
-    let executor: EspExecutor<'_, 8, Local> = EspExecutor::new();
+    let esp_executor: EspExecutor<'_, 8, Local> = EspExecutor::new();
+    let executor = std::rc::Rc::new(esp_executor);
+    let executor_arc = executor.clone();
 
-    let task = executor.spawn(shedule_event(showtime))?;
-    let testtask = executor.spawn_local(async {
+    let net_indicator = executor.spawn_local(async {
         let mut sleep = trigger::timer::get_timer()?;
 
         for _ in 0..3 {
             green_led.set_high()?;
             red_led.set_high()?;
-            sleep.after(Duration::from_secs(1))?.await;
+            sleep.after(Duration::from_millis(200))?.await;
             green_led.set_low()?;
             red_led.set_low()?;
-            sleep.after(Duration::from_secs(1))?.await;
+            sleep.after(Duration::from_millis(200))?.await;
         }
 
         let mut net_staus = |net_staus: bool| {
             if net_staus {
-                green_led.set_high();
-                red_led.set_low();
+                green_led.set_high().ok();
+                red_led.set_low().ok();
             } else {
-                green_led.set_low();
-                red_led.set_high();
+                green_led.set_low().ok();
+                red_led.set_high().ok();
             }
         };
+        let mut rx_net = wifi_handler.lock().await.get_reciver();
 
-        loop {
-            {
-                let wifi = wifi_handler.lock().await;
-                net_staus(wifi.is_connected()?);
-                net_staus(true);
-            }
-
-            let res = discord_webhook(String::from("timout")).await;
-            if res.is_err() {
-                net_staus(false);
-            }
-
-            showtime();
-            {
-                let mut wifi = wifi_handler.lock().await;
-                wifi.disconnect().await?;
-                net_staus(false);
-                utils::power::enter_light_sleep(chrono::Duration::hours(1).to_std().unwrap());
-                reconnect(&mut wifi).await?;
-                net_staus(wifi.is_connected()?);
-                info!("Wifi connected");
-                sleep.after(Duration::from_secs(2))?.await;
-            }
-
-            showtime();
+        while let Ok(value) = rx_net.recv().await {
+            net_staus(value);
         }
+        Ok(())
     })?;
-    let tasks = vec![executor.spawn(task), executor.spawn(testtask)];
+
+    let discord_notification = shedule_event(|| {
+        fn printer<S: Sensor>(s: &mut S) -> String {
+            match s.get_measurment() {
+                Ok(value) => format!("{:.1}", value),
+                Err(_) => "Sensor not connected".to_string(),
+            }
+        }
+
+        let status = match soil_sensor.get_status() {
+            Ok(status) => status.to_string(),
+            Err(_) => "Sensor not connected".to_string(),
+        };
+        let soil = printer(&mut soil_sensor);
+        let hum = printer(&mut hum_sensor);
+        let temp = printer(&mut temp_sensor);
+
+        let message = format!(
+            r#"
+                        Good morning! :sun_with_face:
+                        Here is the daily report:
+                        > Soil moisture: {soil}{}
+                        > Soil moisture status: **{status}**
+                        > Temperature: **{temp}{}**
+                        > Humidity: **{hum}{}**
+                        "#,
+            soil_sensor.get_unit(),
+            temp_sensor.get_unit(),
+            hum_sensor.get_unit()
+        )
+        .replace('\n', r"\n")
+        .replace("  ", "");
+
+        let _ = executor_arc.spawn_local_detached(async {
+            let mut wifi = discord_wifi_handler.lock().await;
+            wifi.reconnect().await.ok();
+            if let Ok(mut sleep) = trigger::timer::get_timer() {
+                if let Ok(s) = sleep.after(Duration::from_secs(3)) {
+                    s.await;
+                }
+            }
+            discord_webhook(message).await.ok();
+            warn!("Message sent");
+            wifi.disconnect().await.ok();
+        });
+    });
+
+    let tasks = vec![
+        executor.spawn_local(discord_notification),
+        executor.spawn_local(net_indicator),
+    ];
 
     executor.run_tasks(|| true, tasks);
 

@@ -1,11 +1,10 @@
-use chrono::{Local, NaiveTime, Timelike, Utc};
+use chrono::{Local, NaiveTime, Timelike};
 use embedded_svc::utils::asyncify::timer::AsyncTimer;
 use embedded_svc::utils::asyncify::Asyncify;
 use esp_idf_svc::timer::EspTimerService;
 use esp_idf_svc::{
     notify::EspNotify,
     sntp::{self},
-    systime::EspSystemTime,
     timer::EspTimer,
 };
 use esp_idf_sys::EspError;
@@ -20,7 +19,7 @@ pub enum TimerError {
     TimerError(#[from] EspError),
 }
 
-pub async fn shedule_event(mut callback: impl FnMut() + Send + 'static) -> Result<(), TimerError> {
+pub async fn shedule_event(mut callback: impl FnMut()) -> Result<(), TimerError> {
     update_current_time_async().await;
     info!("SNTP updated");
     let remaining = get_duration_until_next(8).ok_or(TimerError::ConversionError)?;
@@ -28,6 +27,7 @@ pub async fn shedule_event(mut callback: impl FnMut() + Send + 'static) -> Resul
     let mut timer = get_timer()?;
     callback();
 
+    showtime();
     timer.after(remaining)?.await;
     callback();
 

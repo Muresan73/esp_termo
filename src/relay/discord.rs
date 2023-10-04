@@ -44,7 +44,7 @@ async fn post_request<C: embedded_svc::http::client::Connection>(
     info!("Process response");
     let status = response.status();
     info!("<- {}", status);
-    let (_headers, mut body) = response.split();
+    let (_headers, body) = response.split();
     let mut buf = [0u8; 1024];
     let bytes_read = body.read(&mut buf).await?;
 
