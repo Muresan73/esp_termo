@@ -2,7 +2,7 @@ use async_lock::Mutex;
 use edge_executor::Local;
 use esp_idf_hal::{prelude::Peripherals, task::executor::EspExecutor};
 use log::{info, warn};
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 // If using the `binstart` feature of `esp-idf-sys`, always keep this module imported
 use esp_idf_sys as _;
 
@@ -10,18 +10,18 @@ mod relay;
 mod sensor;
 mod trigger;
 mod utils;
+
 use relay::{
     discord::discord_webhook,
     mqtt::{new_mqqt_client, Command, SimplCommandError, SimpleMqttClient},
 };
-
-use sensor::{bme280::new_bme280, soil::SoilMoisture};
-use trigger::timer::shedule_event;
-
-use crate::{
-    sensor::{bme280::get_bme280_sensors, Sensor},
-    utils::wifi::WifiRelay,
+use sensor::{
+    bme280::{get_bme280_sensors, new_bme280},
+    soil::SoilMoisture,
+    Sensor,
 };
+use trigger::timer::shedule_event;
+use utils::wifi::WifiRelay;
 
 fn main() -> anyhow::Result<()> {
     info!("program started :)");
@@ -33,33 +33,25 @@ fn main() -> anyhow::Result<()> {
     let wifi = futures::executor::block_on(WifiRelay::new(peripherals.modem))?;
     let wifi_handler = Arc::new(Mutex::new(wifi));
 
-    info!("Setup sensors");
-
+    // Setup sensors
     let bme280_i2c = new_bme280(
         peripherals.pins.gpio21,
         peripherals.pins.gpio22,
         peripherals.i2c0,
     );
-
     let (mut temp_sensor, mut hum_sensor, mut _bar_sensor) = get_bme280_sensors(bme280_i2c);
     let mut soil_sensor = SoilMoisture::new(peripherals.adc1, peripherals.pins.gpio36)?;
 
-    let discord_wifi_handler = wifi_handler.clone();
-
-    info!("Fun about to begin ...");
-    let mut green_led = esp_idf_hal::gpio::PinDriver::output(peripherals.pins.gpio4)?;
-    let mut red_led = esp_idf_hal::gpio::PinDriver::output(peripherals.pins.gpio0)?;
-
-    use std::time::Duration;
-    std::thread::sleep(Duration::from_secs(3));
-
+    // Initialize the async executor
     let esp_executor: EspExecutor<'_, 8, Local> = EspExecutor::new();
     let executor = std::rc::Rc::new(esp_executor);
     let executor_arc = executor.clone();
 
+    // Indicator to show that wifi is connected
+    let mut green_led = esp_idf_hal::gpio::PinDriver::output(peripherals.pins.gpio4)?;
+    let mut red_led = esp_idf_hal::gpio::PinDriver::output(peripherals.pins.gpio0)?;
     let net_indicator = executor.spawn_local(async {
         let mut sleep = trigger::timer::get_timer()?;
-
         for _ in 0..3 {
             green_led.set_high()?;
             red_led.set_high()?;
@@ -68,7 +60,6 @@ fn main() -> anyhow::Result<()> {
             red_led.set_low()?;
             sleep.after(Duration::from_millis(200))?.await;
         }
-
         let mut net_staus = |net_staus: bool| {
             if net_staus {
                 green_led.set_high().ok();
@@ -79,13 +70,14 @@ fn main() -> anyhow::Result<()> {
             }
         };
         let mut rx_net = wifi_handler.lock().await.get_reciver();
-
         while let Ok(value) = rx_net.recv().await {
             net_staus(value);
         }
         Ok(())
     })?;
 
+    // Send notification to discord at 8 AM
+    let discord_wifi_handler = wifi_handler.clone();
     let discord_notification = shedule_event(|| {
         fn printer<S: Sensor>(s: &mut S) -> String {
             match s.get_measurment() {
@@ -93,7 +85,6 @@ fn main() -> anyhow::Result<()> {
                 Err(_) => "Sensor not connected".to_string(),
             }
         }
-
         let status = match soil_sensor.get_status() {
             Ok(status) => status.to_string(),
             Err(_) => "Sensor not connected".to_string(),
@@ -132,11 +123,11 @@ fn main() -> anyhow::Result<()> {
         });
     });
 
+    // Start the executor with the tasks
     let tasks = vec![
         executor.spawn_local(discord_notification),
         executor.spawn_local(net_indicator),
     ];
-
     executor.run_tasks(|| true, tasks);
 
     log::warn!("Tasks completed");

@@ -62,23 +62,27 @@ where
 
     /// Get the raw read of the moisture result, analog read
     pub fn get_raw_moisture(&mut self) -> MoistureResult<u16> {
-        let measurement = self.adc_driver.read(&mut self.adc_pin)?;
-        match measurement {
-            msmnt if msmnt < 1000 => Err(MoistureError::SensorNotConnected()),
-            msmnt => Ok(msmnt),
-        }
+        Ok(self.adc_driver.read(&mut self.adc_pin)?)
     }
 
     /// Get precentage read of the moisture.
     pub fn get_moisture_precentage(&mut self) -> MoistureResult<f32> {
-        let raw_read = self.get_raw_moisture()?;
-        if raw_read > MAX_DRY {
+        let mean: u16 = (0..10)
+            .map(|_| self.get_raw_moisture())
+            .sum::<MoistureResult<u16>>()?
+            / 10;
+        let measurement = match mean {
+            msmnt if msmnt < 1000 => Err(MoistureError::SensorNotConnected()),
+            msmnt => Ok(msmnt),
+        }?;
+
+        if measurement > MAX_DRY {
             return Ok(NO_PRECENTAGE);
-        } else if raw_read < MAX_WET {
+        } else if measurement < MAX_WET {
             return Ok(FULL_PRECENTAGE);
         }
 
-        let value_diff = MAX_DRY - raw_read;
+        let value_diff = MAX_DRY - measurement;
         Ok((value_diff as f32 / MOISTURE_RANGE as f32) * FULL_PRECENTAGE)
     }
 
