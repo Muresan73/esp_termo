@@ -14,6 +14,7 @@ mod utils;
 use relay::{
     discord::discord_webhook,
     mqtt::{new_mqqt_client, Command, SimplCommandError, SimpleMqttClient},
+    ota::fetch_ota_update,
 };
 use sensor::{
     bme280::{get_bme280_sensors, new_bme280},
@@ -134,11 +135,27 @@ fn main() -> anyhow::Result<()> {
         });
     });
 
+    let ota = async move {
+        // let t = std::thread::spawn(|| {
+        #[cfg(not(feature = "ota_image"))]
+        {
+            let error = fetch_ota_update().unwrap_err();
+            error!("OTA error: {:?}", error);
+        }
+        #[cfg(feature = "ota_image")]
+        warn!("OTA updated");
+        // });
+        // t.join().unwrap();
+        warn!("async finished");
+    };
+
     // Start the executor with the tasks
     let tasks = vec![
-        executor.spawn_local(discord_notification),
-        executor.spawn_local(net_indicator),
+        // executor.spawn_local(discord_notification),
+        // executor.spawn_local(net_indicator),
+        executor.spawn_local(ota)?,
     ];
+
     executor.run_tasks(|| true, tasks);
 
     log::warn!("Tasks completed");

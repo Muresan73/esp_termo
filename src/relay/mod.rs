@@ -3,6 +3,7 @@ use esp_idf_sys::EspError;
 
 pub mod discord;
 pub mod mqtt;
+pub mod ota;
 
 pub trait LoopRelay {
     fn post(&self, msg: &str) -> Result<(), ()>;

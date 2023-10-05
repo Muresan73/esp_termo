@@ -4,3 +4,5 @@
 /Cargo.lock
 .env
 certs
+serve/node_modules
+serve/public

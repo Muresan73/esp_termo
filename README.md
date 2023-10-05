@@ -1,5 +1,22 @@
 # Basic esp32 temprature sensore node
 
+## Flash image
+```bash
+espflash erase-parts otadata --partition-table partitions.csv
+espflash flash  target/xtensa-esp32-espidf/release/esp-termo --monitor --partition-table partitions.csv
+```
+
+# OTA
+## Build OTA image
+```bash
+espflash save-image --chip esp32 target/xtensa-esp32-espidf/release/esp-termo serve/public/new.bin
+```
+
+## run basic image endpoint
+```bash
+cd serve/ && node serve.js
+```
+
 ### Start MQTT broker
 ```bash
 podman run -d --name emqx -p 1883:1883 -p 8083:8083 -p 8084:8084 -p 8883:8883 -p 18083:18083 emqx/emqx
