@@ -1,8 +1,8 @@
-use async_lock::Mutex;
+use async_lock::RwLock;
 use edge_executor::Local;
 use esp_idf_hal::{prelude::Peripherals, task::executor::EspExecutor};
-use log::{info, warn};
-use std::{sync::Arc, time::Duration};
+use log::{error, info, warn};
+use std::{result::Result::Ok, sync::Arc, time::Duration};
 // If using the `binstart` feature of `esp-idf-sys`, always keep this module imported
 use esp_idf_sys as _;
 
@@ -31,7 +31,7 @@ fn main() -> anyhow::Result<()> {
     let peripherals = Peripherals::take().unwrap();
 
     let wifi = futures::executor::block_on(WifiRelay::new(peripherals.modem))?;
-    let wifi_handler = Arc::new(Mutex::new(wifi));
+    let wifi_handler = Arc::new(RwLock::new(wifi));
 
     // Setup sensors
     let bme280_i2c = new_bme280(
@@ -45,12 +45,11 @@ fn main() -> anyhow::Result<()> {
     // Initialize the async executor
     let esp_executor: EspExecutor<'_, 8, Local> = EspExecutor::new();
     let executor = std::rc::Rc::new(esp_executor);
-    let executor_arc = executor.clone();
 
     // Indicator to show that wifi is connected
     let mut green_led = esp_idf_hal::gpio::PinDriver::output(peripherals.pins.gpio4)?;
     let mut red_led = esp_idf_hal::gpio::PinDriver::output(peripherals.pins.gpio0)?;
-    let net_indicator = executor.spawn_local(async {
+    let net_indicator = async {
         let mut sleep = trigger::timer::get_timer()?;
         for _ in 0..3 {
             green_led.set_high()?;
@@ -69,15 +68,16 @@ fn main() -> anyhow::Result<()> {
                 red_led.set_high().ok();
             }
         };
-        let mut rx_net = wifi_handler.lock().await.get_reciver();
+        let mut rx_net = wifi_handler.read().await.get_reciver();
         while let Ok(value) = rx_net.recv().await {
             net_staus(value);
         }
-        Ok(())
-    })?;
+        Ok::<(), trigger::timer::TimerError>(())
+    };
 
     // Send notification to discord at 8 AM
     let discord_wifi_handler = wifi_handler.clone();
+    let discord_executor = executor.clone();
     let discord_notification = shedule_event(|| {
         fn printer<S: Sensor>(s: &mut S) -> String {
             match s.get_measurment() {
@@ -109,17 +109,28 @@ fn main() -> anyhow::Result<()> {
         .replace('\n', r"\n")
         .replace("  ", "");
 
-        let _ = executor_arc.spawn_local_detached(async {
-            let mut wifi = discord_wifi_handler.lock().await;
-            wifi.reconnect().await.ok();
-            if let Ok(mut sleep) = trigger::timer::get_timer() {
-                if let Ok(s) = sleep.after(Duration::from_secs(3)) {
-                    s.await;
+        let _ = discord_executor.spawn_local_detached(async {
+            let wifi = discord_wifi_handler.read().await;
+            match wifi.get_inner().is_connected() {
+                Ok(true) => {
+                    discord_webhook(message).await.ok();
+                }
+                Ok(false) => {
+                    drop(wifi);
+                    let mut wifi = discord_wifi_handler.write().await;
+                    wifi.reconnect().await.ok();
+                    if let Ok(mut sleep) = trigger::timer::get_timer() {
+                        if let Ok(s) = sleep.after(Duration::from_secs(3)) {
+                            s.await;
+                        }
+                    }
+                    discord_webhook(message).await.ok();
+                    wifi.disconnect().await.ok();
+                }
+                Err(_) => {
+                    error!("Wifi handler not awailable");
                 }
             }
-            discord_webhook(message).await.ok();
-            warn!("Message sent");
-            wifi.disconnect().await.ok();
         });
     });
 

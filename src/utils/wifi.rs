@@ -68,7 +68,7 @@ impl WifiRelay {
         let (tx, rx) = async_watch::channel(false);
         Ok(Self { wifi, tx, rx })
     }
-    pub fn get_reciver(&mut self) -> Receiver<bool> {
+    pub fn get_reciver(&self) -> Receiver<bool> {
         self.rx.clone()
     }
 
@@ -83,5 +83,8 @@ impl WifiRelay {
         self.wifi.wait_netif_up().await?;
         self.tx.send(true).ok();
         Ok(())
+    }
+    pub fn get_inner(&self) -> &AsyncWifi<EspWifi<'static>> {
+        &self.wifi
     }
 }
