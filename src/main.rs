@@ -14,6 +14,8 @@ mod sensor;
 mod trigger;
 mod utils;
 
+mod hc_sr04;
+
 use relay::{
     discord::discord_webhook,
     mqtt::{new_mqqt_client, Command, SimplCommandError, SimpleMqttClient},
@@ -53,7 +55,7 @@ fn main() -> anyhow::Result<()> {
     let executor = std::rc::Rc::new(esp_executor);
 
     // Indicator to show that wifi is connected
-    let mut green_led = esp_idf_hal::gpio::PinDriver::output(peripherals.pins.gpio4)?;
+    let mut green_led = esp_idf_hal::gpio::PinDriver::output(peripherals.pins.gpio5)?;
     let mut red_led = esp_idf_hal::gpio::PinDriver::output(peripherals.pins.gpio0)?;
     let net_indicator = async {
         let sleep_service = trigger::timer::get_timer()?;
@@ -80,6 +82,28 @@ fn main() -> anyhow::Result<()> {
             net_staus(value);
         }
         Ok::<(), trigger::timer::TimerError>(())
+    };
+
+    // Ultrasonic Distance
+    use esp_idf_hal::gpio::PinDriver;
+    let mut triger = PinDriver::output(peripherals.pins.gpio4)?;
+    let mut echo = PinDriver::input(peripherals.pins.gpio2)?;
+    echo.set_pull(esp_idf_hal::gpio::Pull::Down)?;
+    let mut ultra = hc_sr04::HcSr04::new(triger, echo, None).expect("cant create sensor");
+    let ultra = async {
+        let delay_service = trigger::timer::get_timer().unwrap();
+        let mut timer = delay_service.timer().unwrap();
+
+        loop {
+            if let Some(distance) = ultra.measure_distance(hc_sr04::Unit::Centimeters).await? {
+                println!("Distance: {}cm", distance);
+            } else {
+                println!("Object out of range");
+            }
+            timer.after(Duration::from_secs(1)).await.ok();
+        }
+
+        Ok::<(), hc_sr04::MeasurementError>(())
     };
 
     // Send notification to discord at 8 AM
@@ -164,7 +188,8 @@ fn main() -> anyhow::Result<()> {
         let _ = join!(
             executor.spawn(discord_notification),
             executor.spawn(net_indicator),
-            executor.spawn(ota)
+            executor.spawn(ota),
+            executor.spawn(ultra)
         );
     }));
 
