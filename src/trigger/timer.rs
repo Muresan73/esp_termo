@@ -1,12 +1,9 @@
 use chrono::{Local, NaiveTime, Timelike};
-use embedded_svc::utils::asyncify::timer::AsyncTimer;
+use embedded_svc::utils::asyncify::timer::AsyncTimerService;
 use embedded_svc::utils::asyncify::Asyncify;
+use esp_idf_hal::task::asynch::Notification;
+use esp_idf_svc::sntp::{self};
 use esp_idf_svc::timer::EspTimerService;
-use esp_idf_svc::{
-    notify::EspNotify,
-    sntp::{self},
-    timer::EspTimer,
-};
 use esp_idf_sys::EspError;
 use log::info;
 use std::time::Duration;
@@ -24,11 +21,12 @@ pub async fn shedule_event(mut callback: impl FnMut()) -> Result<(), TimerError>
     info!("SNTP updated");
     let remaining = get_duration_until_next(8).ok_or(TimerError::ConversionError)?;
 
-    let mut timer = get_timer()?;
+    let timer_service = get_timer()?;
+    let mut timer = timer_service.timer()?;
     callback();
 
     showtime();
-    timer.after(remaining)?.await;
+    timer.after(remaining).await?;
     callback();
 
     let stream = timer.every(chrono::Duration::days(1).to_std().expect("Can't fail"))?;
@@ -40,9 +38,10 @@ pub async fn shedule_event(mut callback: impl FnMut()) -> Result<(), TimerError>
     }
 }
 
-pub fn get_timer() -> Result<AsyncTimer<EspTimer>, EspError> {
+pub fn get_timer() -> Result<AsyncTimerService<EspTimerService<esp_idf_svc::timer::Task>>, EspError>
+{
     let timer_service = EspTimerService::new()?;
-    let timer = timer_service.into_async().timer()?;
+    let timer = timer_service.into_async();
     Ok(timer)
 }
 
@@ -81,13 +80,11 @@ pub fn get_duration_until_next(hour: u32) -> Option<Duration> {
 }
 
 async fn update_current_time_async() {
-    let notification = EspNotify::new(&Default::default()).unwrap();
-    let notification_a = notification.clone().into_async();
+    let notification = Notification::new();
 
-    let _sntp = sntp::EspSntp::new_with_callback(&Default::default(), move |now| {
-        notification.post(&(now.as_secs() as u32)).unwrap();
+    let _sntp = sntp::EspSntp::new_with_callback(&Default::default(), |_now| {
+        notification.notify_lsb();
     });
 
-    let mut sub = notification_a.subscribe().unwrap();
-    sub.recv().await;
+    notification.wait().await;
 }

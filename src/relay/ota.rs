@@ -1,7 +1,7 @@
 use dotenvy_macro::dotenv;
 use embedded_svc::http::client::*;
 use embedded_svc::utils::io;
-use esp_idf_svc::errors::EspIOError;
+use esp_idf_hal::io::EspIOError;
 use esp_idf_svc::http::client::*;
 use log::info;
 
@@ -19,7 +19,10 @@ pub enum OtaError {
     BadResponse(u16),
 }
 
-pub fn fetch_ota_update() -> Result<(), OtaError> {
+/// **Note**:
+/// This function only returns if there is an error updating the firmware\
+/// Otherwise it will restart the device
+pub fn fetch_ota_update() -> Result<!, OtaError> {
     info!("About to fetch content from ota");
 
     let connection = EspHttpConnection::new(&Configuration::default())?;

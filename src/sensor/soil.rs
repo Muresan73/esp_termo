@@ -1,10 +1,10 @@
+use super::*;
 use esp_idf_hal::{
-    adc::{config::Config, AdcChannelDriver, AdcDriver, Atten11dB, ADC1},
+    adc::{attenuation, config::Config, AdcChannelDriver, AdcDriver, ADC1},
     gpio::ADCPin,
     peripheral::Peripheral,
+    sys::adc_atten_t,
 };
-
-use super::*;
 use esp_idf_sys::EspError;
 const MAX_DRY: u16 = 2800;
 const MAX_WET: u16 = 1300;
@@ -40,9 +40,9 @@ pub enum MoistureError {
 }
 type MoistureResult<T> = Result<T, MoistureError>;
 
-pub struct SoilMoisture<'d, T: ADCPin> {
+pub struct SoilMoisture<'d, T: ADCPin, const A: adc_atten_t = { attenuation::DB_11 }> {
     adc_driver: AdcDriver<'d, ADC1>,
-    adc_pin: AdcChannelDriver<'d, T, Atten11dB<ADC1>>,
+    adc_pin: AdcChannelDriver<'d, A, T>,
 }
 
 impl<'d, T: ADCPin> SoilMoisture<'d, T>
@@ -53,7 +53,7 @@ where
     /// pin -> gpio from peripherals pins that is connected
     pub fn new(adc: ADC1, pin: impl Peripheral<P = T> + 'd) -> MoistureResult<Self> {
         let adc = AdcDriver::new(adc, &Config::new().calibration(true))?;
-        let adc_pin: AdcChannelDriver<'_, _, Atten11dB<_>> = AdcChannelDriver::new(pin)?;
+        let adc_pin: AdcChannelDriver<'_, { attenuation::DB_11 }, T> = AdcChannelDriver::new(pin)?;
         Ok(SoilMoisture {
             adc_driver: adc,
             adc_pin,

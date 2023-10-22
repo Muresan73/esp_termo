@@ -36,8 +36,7 @@ pub fn new_bme280<I2C: I2c>(
     let i2c = I2cDriver::new(i2c_pin, sda, scl, &config)?;
 
     // 3. Create an instance of the bme280 sensor.
-    let delay = Delay;
-    let mut bme280 = Bme280::new(i2c, delay);
+    let mut bme280 = Bme280::new(i2c, Delay::new_default());
     bme280.init()?;
 
     // 4. Read and print the sensor's device ID.

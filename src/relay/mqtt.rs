@@ -27,9 +27,9 @@ const KEY: &str = dotenv!("KEY");
 const MQTT_SERVER: &str = dotenv!("MQTT_SERVER");
 const CERT: &[u8] = include_bytes!("../../certs/cert.pem");
 
-pub fn new_mqqt_client(
+pub fn new_mqqt_client<'a>(
     process_message: impl Fn(Result<Command, CommandError>) + Send + 'static,
-) -> Result<EspMqttClient, EspError> {
+) -> Result<EspMqttClient<'a>, EspError> {
     let conf = MqttClientConfiguration {
         client_id: Some("esp32-sensore"),
         server_certificate: Some(X509::pem_until_nul(CERT)),
@@ -46,7 +46,7 @@ pub fn new_mqqt_client(
     };
     info!("MQTT Conecting ...");
     let mut client = EspMqttClient::new(
-        format!("mqtts://{MQTT_SERVER}"),
+        format!("mqtts://{MQTT_SERVER}").as_str(),
         &conf,
         move |message_event| {
             match message_event {
@@ -99,7 +99,7 @@ pub trait SimpleMqttClient {
     fn error_message(&mut self, msg: String);
 }
 
-impl SimpleMqttClient for EspMqttClient {
+impl SimpleMqttClient for EspMqttClient<'_> {
     fn message(&mut self, msg: String) -> Result<(), EspError> {
         self.publish("feeds/message", QoS::AtMostOnce, false, msg.as_bytes())?;
         Ok(())
