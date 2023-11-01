@@ -1,6 +1,6 @@
 #![feature(never_type)]
 use async_lock::RwLock;
-use esp_idf_hal::{prelude::Peripherals, task::block_on};
+use esp_idf_hal::{gpio::PinDriver, prelude::Peripherals, task::block_on};
 use futures::join;
 use log::{error, info, warn};
 use std::{rc::Rc, result::Result::Ok, time::Duration};
@@ -85,7 +85,6 @@ fn main() -> anyhow::Result<()> {
     };
 
     // Ultrasonic Distance
-    use esp_idf_hal::gpio::PinDriver;
     let mut triger = PinDriver::output(peripherals.pins.gpio4)?;
     let mut echo = PinDriver::input(peripherals.pins.gpio2)?;
     echo.set_pull(esp_idf_hal::gpio::Pull::Down)?;
@@ -95,15 +94,29 @@ fn main() -> anyhow::Result<()> {
         let mut timer = delay_service.timer().unwrap();
 
         loop {
-            if let Some(distance) = ultra.measure_distance(hc_sr04::Unit::Centimeters).await? {
-                println!("Distance: {}cm", distance);
+            if let Some(distance) = ultra.measure_distance(hc_sr04::Unit::Centimeters)? {
+                info!("Distance: {}cm", distance);
             } else {
-                println!("Object out of range");
+                warn!("Distance error");
             }
             timer.after(Duration::from_secs(1)).await.ok();
         }
 
         Ok::<(), hc_sr04::MeasurementError>(())
+    };
+
+    let mut pump_relay = PinDriver::output(peripherals.pins.gpio13)?;
+    pump_relay.set_low().ok();
+    let pump = async {
+        let delay_service = trigger::timer::get_timer().unwrap();
+        let mut timer = delay_service.timer().unwrap();
+
+        loop {
+            pump_relay.set_high().ok();
+            timer.after(Duration::from_secs(1)).await.ok();
+            pump_relay.set_low().ok();
+            timer.after(Duration::from_secs(5)).await.ok();
+        }
     };
 
     // Send notification to discord at 8 AM
@@ -189,7 +202,8 @@ fn main() -> anyhow::Result<()> {
             executor.spawn(discord_notification),
             executor.spawn(net_indicator),
             executor.spawn(ota),
-            executor.spawn(ultra)
+            executor.spawn(ultra),
+            executor.spawn(pump)
         );
     }));
 

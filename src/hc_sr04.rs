@@ -37,6 +37,8 @@ pub struct HcSr04<'a, OPin: Pin, IPin: Pin> {
 pub enum MeasurementError {
     EchoError,
     TrigError,
+    NoEcho,
+    MissedEcho,
 }
 
 impl<'a, OPin: Pin, IPin: Pin> HcSr04<'a, OPin, IPin> {
@@ -98,18 +100,27 @@ impl<'a, OPin: Pin, IPin: Pin> HcSr04<'a, OPin, IPin> {
     /// is present within maximum measuring range (*4m*); otherwhise, on `Some` variant instead,
     /// contained value represents distance expressed as the specified `unit`
     /// (**unit of measure**).
-    pub async fn measure_distance(&mut self, unit: Unit) -> Result<Option<f32>, MeasurementError> {
+    pub fn measure_distance(&mut self, unit: Unit) -> Result<Option<f32>, MeasurementError> {
         info!("Measuring distance ...");
         self.echo.enable_interrupt().ok();
+        let timeout = Instant::now();
 
         self.trig.set_high().ok();
         thread::sleep(Duration::from_micros(30));
         self.trig.set_low().ok();
 
-        while self.echo.is_low() {}
+        while self.echo.is_low() {
+            if timeout.elapsed().as_millis() > 10 {
+                return Err(MeasurementError::NoEcho);
+            }
+        }
         let instant = Instant::now();
 
-        while self.echo.is_high() {}
+        while self.echo.is_high() {
+            if instant.elapsed().as_millis() > 1 {
+                return Err(MeasurementError::MissedEcho);
+            }
+        }
         info!("calc distance ...");
         // Distance in cm.
         let distance = (self.sound_speed * instant.elapsed().as_secs_f32()) / 2.;

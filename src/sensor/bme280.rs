@@ -118,14 +118,11 @@ impl Sensor for Bme280TempSensor {
     type Status = TempStatus;
 
     fn get_measurment(&mut self) -> Result<f32, Self::Error> {
-        let bme280 = self
-            .bme280
+        self.bme280
             .as_mut()
-            .ok_or(Self::Error::SensorNotConnected())?;
-
-        let mut bme280 = bme280.lock().or(Err(Self::Error::SensorNotConnected()))?;
-
-        bme280
+            .ok_or(Self::Error::SensorNotConnected())?
+            .lock()
+            .or(Err(Self::Error::SensorNotConnected()))?
             .read_temperature()?
             .ok_or(Self::Error::SensorNotConnected())
     }
@@ -175,15 +172,10 @@ impl Sensor for Bme280HumiditySensor {
     type Status = HumidityStatus;
 
     fn get_measurment(&mut self) -> Result<f32, Self::Error> {
-        let bme280 = self
-            .bme280
+        self.bme280
             .as_mut()
-            .ok_or(Self::Error::SensorNotConnected())?;
-
-        let mut bme280 = bme280.lock().or(Err(Self::Error::SensorNotConnected()))?;
-
-        bme280
-            .read_humidity()?
+            .and_then(|sensor| sensor.lock().ok())
+            .and_then(|mut locked_sensor| locked_sensor.read_humidity().ok().and_then(|i| i))
             .ok_or(Self::Error::SensorNotConnected())
     }
 
@@ -231,14 +223,11 @@ impl Sensor for Bme280PressureSensor {
     type Status = PressureStatus;
 
     fn get_measurment(&mut self) -> Result<f32, Self::Error> {
-        let bme280 = self
-            .bme280
+        self.bme280
             .as_mut()
-            .ok_or(Self::Error::SensorNotConnected())?;
-
-        let mut bme280 = bme280.lock().or(Err(Self::Error::SensorNotConnected()))?;
-
-        bme280
+            .ok_or(Self::Error::SensorNotConnected())?
+            .lock()
+            .or(Err(Self::Error::SensorNotConnected()))?
             .read_pressure()?
             .ok_or(Self::Error::SensorNotConnected())
     }
