@@ -16,7 +16,7 @@ pub enum Unit {
     Meters,
 }
 
-/// **HC-SR04** ultrasonic sensor on *Raspberry Pi*.
+/// **HC-SR04** ultrasonic sensor on *ESP32*.
 ///
 /// # Fileds
 ///
@@ -26,6 +26,31 @@ pub enum Unit {
 /// - `sound_speed`: speed of sound given the ambient **Temperature**
 /// - `timeout`: **ECHO** pin polling timeout, considering the maximum measuring range of 4m for
 ///     the sensor and the speed of sound given the ambient **Temperature**
+///
+/// # Example
+/// ```
+/// let triger = PinDriver::output(peripherals.pins.gpio4)?;
+/// let mut echo = PinDriver::input(peripherals.pins.gpio2)?;
+/// echo.set_pull(esp_idf_hal::gpio::Pull::Down)?;
+/// let mut ultra = hc_sr04::HcSr04::new(triger, echo, None).expect("cant create sensor");
+/// let ultra = async {
+///     let delay_service = trigger::timer::get_timer().unwrap();
+///     let mut timer = delay_service.timer().unwrap();
+///
+///     loop {
+///         if let Some(distance) = ultra.measure_distance(hc_sr04::Unit::Centimeters)? {
+///             info!("Distance: {}cm", distance);
+///         } else {
+///             warn!("Distance error");
+///         }
+///         timer.after(Duration::from_secs(1)).await.ok();
+///     }
+///
+///     Ok::<(), hc_sr04::MeasurementError>(())
+/// };
+///
+/// block_on(ultra).unwrap();
+/// ```
 pub struct HcSr04<'a, OPin: Pin, IPin: Pin> {
     trig: PinDriver<'a, OPin, Output>,
     echo: PinDriver<'a, IPin, Input>,

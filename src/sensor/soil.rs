@@ -1,6 +1,6 @@
 use super::*;
 use esp_idf_hal::{
-    adc::{attenuation, config::Config, AdcChannelDriver, AdcDriver, ADC1},
+    adc::{attenuation, config::Config, Adc, AdcChannelDriver, AdcDriver},
     gpio::ADCPin,
     peripheral::Peripheral,
     sys::adc_atten_t,
@@ -40,18 +40,21 @@ pub enum MoistureError {
 }
 type MoistureResult<T> = Result<T, MoistureError>;
 
-pub struct SoilMoisture<'d, T: ADCPin, const A: adc_atten_t = { attenuation::DB_11 }> {
-    adc_driver: AdcDriver<'d, ADC1>,
+pub struct SoilMoisture<'d, T: ADCPin, ADC: Adc, const A: adc_atten_t = { attenuation::DB_11 }> {
+    adc_driver: AdcDriver<'d, ADC>,
     adc_pin: AdcChannelDriver<'d, A, T>,
 }
 
-impl<'d, T: ADCPin> SoilMoisture<'d, T>
+impl<'d, T: ADCPin, ADC: Adc> SoilMoisture<'d, T, ADC>
 where
-    T: ADCPin<Adc = ADC1>,
+    T: ADCPin<Adc = ADC>,
 {
     /// adc -> the adc from the peripherals
     /// pin -> gpio from peripherals pins that is connected
-    pub fn new(adc: ADC1, pin: impl Peripheral<P = T> + 'd) -> MoistureResult<Self> {
+    pub fn new(
+        adc: impl Peripheral<P = ADC> + 'd,
+        pin: impl Peripheral<P = T> + 'd,
+    ) -> MoistureResult<Self> {
         let adc = AdcDriver::new(adc, &Config::new().calibration(true))?;
         let adc_pin: AdcChannelDriver<'_, { attenuation::DB_11 }, T> = AdcChannelDriver::new(pin)?;
         Ok(SoilMoisture {
@@ -103,9 +106,9 @@ where
     }
 }
 
-impl<T: ADCPin> Sensor for SoilMoisture<'_, T>
+impl<T: ADCPin, ADC: Adc> Sensor for SoilMoisture<'_, T, ADC>
 where
-    T: ADCPin<Adc = ADC1>,
+    T: ADCPin<Adc = ADC>,
 {
     type Error = MoistureError;
 

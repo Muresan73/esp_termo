@@ -4,6 +4,7 @@ use log::error;
 use serde_json::{json, Value};
 
 pub mod bme280;
+pub mod hc_sr04;
 pub mod soil;
 
 pub trait MessageAble {

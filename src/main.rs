@@ -14,22 +14,13 @@ mod sensor;
 mod trigger;
 mod utils;
 
-mod hc_sr04;
-
-use relay::{
-    discord::discord_webhook,
-    mqtt::{new_mqqt_client, Command, SimplCommandError, SimpleMqttClient},
-    ota::fetch_ota_update,
-};
+use relay::discord::discord_webhook;
 use sensor::{
     bme280::{get_bme280_sensors, new_bme280},
     soil::SoilMoisture,
-    Sensor,
 };
 use trigger::timer::shedule_event;
-use utils::wifi::WifiRelay;
-
-use crate::trigger::timer;
+use utils::{helper::discord::get_message, wifi::WifiRelay};
 
 fn main() -> anyhow::Result<()> {
     info!("program started :)");
@@ -38,7 +29,8 @@ fn main() -> anyhow::Result<()> {
 
     let peripherals = Peripherals::take().unwrap();
 
-    let wifi = futures::executor::block_on(WifiRelay::new(peripherals.modem))?;
+    // Setup wifi
+    let wifi = block_on(WifiRelay::new(peripherals.modem))?;
     let wifi_handler = Rc::new(RwLock::new(wifi));
 
     // Setup sensors
@@ -51,59 +43,7 @@ fn main() -> anyhow::Result<()> {
     let mut soil_sensor = SoilMoisture::new(peripherals.adc1, peripherals.pins.gpio36)?;
 
     // Initialize the async executor
-    let esp_executor: LocalExecutor = Default::default();
-    let executor = std::rc::Rc::new(esp_executor);
-
-    // Indicator to show that wifi is connected
-    let mut green_led = esp_idf_hal::gpio::PinDriver::output(peripherals.pins.gpio5)?;
-    let mut red_led = esp_idf_hal::gpio::PinDriver::output(peripherals.pins.gpio0)?;
-    let net_indicator = async {
-        let sleep_service = trigger::timer::get_timer()?;
-        let mut sleep = sleep_service.timer()?;
-        for _ in 0..3 {
-            green_led.set_high()?;
-            red_led.set_high()?;
-            sleep.after(Duration::from_millis(200)).await?;
-            green_led.set_low()?;
-            red_led.set_low()?;
-            sleep.after(Duration::from_millis(200)).await?;
-        }
-        let mut net_staus = |net_staus: bool| {
-            if net_staus {
-                green_led.set_high().ok();
-                red_led.set_low().ok();
-            } else {
-                green_led.set_low().ok();
-                red_led.set_high().ok();
-            }
-        };
-        let mut rx_net = wifi_handler.read().await.get_reciver();
-        while let Ok(value) = rx_net.recv().await {
-            net_staus(value);
-        }
-        Ok::<(), trigger::timer::TimerError>(())
-    };
-
-    // Ultrasonic Distance
-    let mut triger = PinDriver::output(peripherals.pins.gpio4)?;
-    let mut echo = PinDriver::input(peripherals.pins.gpio2)?;
-    echo.set_pull(esp_idf_hal::gpio::Pull::Down)?;
-    let mut ultra = hc_sr04::HcSr04::new(triger, echo, None).expect("cant create sensor");
-    let ultra = async {
-        let delay_service = trigger::timer::get_timer().unwrap();
-        let mut timer = delay_service.timer().unwrap();
-
-        loop {
-            if let Some(distance) = ultra.measure_distance(hc_sr04::Unit::Centimeters)? {
-                info!("Distance: {}cm", distance);
-            } else {
-                warn!("Distance error");
-            }
-            timer.after(Duration::from_secs(1)).await.ok();
-        }
-
-        Ok::<(), hc_sr04::MeasurementError>(())
-    };
+    let executor: LocalExecutor = Default::default();
 
     let mut pump_relay = PinDriver::output(peripherals.pins.gpio13)?;
     pump_relay.set_low().ok();
@@ -121,39 +61,10 @@ fn main() -> anyhow::Result<()> {
 
     // Send notification to discord at 8 AM
     let discord_wifi_handler = wifi_handler.clone();
-    let discord_executor = executor.clone();
     let discord_notification = shedule_event(|| {
-        fn printer<S: Sensor>(s: &mut S) -> String {
-            match s.get_measurment() {
-                Ok(value) => format!("{:.1}", value),
-                Err(_) => "Sensor not connected".to_string(),
-            }
-        }
-        let status = match soil_sensor.get_status() {
-            Ok(status) => status.to_string(),
-            Err(_) => "Sensor not connected".to_string(),
-        };
-        let soil = printer(&mut soil_sensor);
-        let hum = printer(&mut hum_sensor);
-        let temp = printer(&mut temp_sensor);
+        let message = get_message(&mut soil_sensor, &mut hum_sensor, &mut temp_sensor);
 
-        let message = format!(
-            r#"
-                        Good morning! :sun_with_face:
-                        Here is the daily report:
-                        > Soil moisture: {soil}{}
-                        > Soil moisture status: **{status}**
-                        > Temperature: **{temp}{}**
-                        > Humidity: **{hum}{}**
-                        "#,
-            soil_sensor.get_unit(),
-            temp_sensor.get_unit(),
-            hum_sensor.get_unit()
-        )
-        .replace('\n', r"\n")
-        .replace("  ", "");
-
-        discord_executor
+        executor
             .spawn(async {
                 let wifi = discord_wifi_handler.read().await;
                 match wifi.get_inner().is_connected() {
@@ -164,12 +75,7 @@ fn main() -> anyhow::Result<()> {
                         drop(wifi);
                         let mut wifi = discord_wifi_handler.write().await;
                         wifi.reconnect().await.ok();
-                        if let Ok(ts) = trigger::timer::get_timer() {
-                            if let Ok(mut sleep) = ts.timer() {
-                                sleep.after(Duration::from_secs(3)).await.ok();
-                            }
-                        }
-
+                        trigger::timer::safe_sleep(Duration::from_secs(3)).await;
                         discord_webhook(message).await.ok();
                         wifi.disconnect().await.ok();
                     }
@@ -181,114 +87,12 @@ fn main() -> anyhow::Result<()> {
             .detach();
     });
 
-    let ota = async move {
-        // let t = std::thread::spawn(|| {
-        #[cfg(not(feature = "ota_image"))]
-        {
-            let error = fetch_ota_update().unwrap_err();
-            error!("OTA error: {:?}", error);
-        }
-        #[cfg(feature = "ota_image")]
-        warn!("OTA updated");
-        // });
-        // t.join().unwrap();
-        warn!("async finished");
-    };
-
     // Start the executor with the tasks
-
     block_on(executor.run(async {
-        let _ = join!(
-            executor.spawn(discord_notification),
-            executor.spawn(net_indicator),
-            executor.spawn(ota),
-            executor.spawn(ultra),
-            executor.spawn(pump)
-        );
+        let _ = join!(executor.spawn(discord_notification), executor.spawn(pump));
     }));
 
-    log::warn!("Tasks completed");
-    #[cfg(feature = "mqtt")]
-    {
-        let mut event_loop = EspBackgroundEventLoop::new(&Default::default())?;
-        let cmd_loop = event_loop.clone();
-        let mqqt_service = new_mqqt_client(move |msg| {
-            let _ = match msg {
-                Ok(cmd) => cmd_loop.post(&cmd, None),
-                Err(err) => cmd_loop.post::<SimplCommandError>(&err.into(), None),
-            }
-            .map_err(|err| {
-                error!("Error posting: {:?}", err);
-                err
-            });
-        })?;
-
-        use std::sync::{Arc, Mutex};
-        let mqtt_client = Arc::new(Mutex::new(mqqt_service));
-        let mqtt_err = mqtt_client.clone();
-        info!("Ready to broadcast ...");
-
-        info!("Setup background event loop");
-        // this let variable is necessary so that the Subscription does not get dropped
-        let _subscription = event_loop.subscribe(move |message: &Command| {
-            info!("Got message from the event loop: {:?}", message);
-            match message {
-                Command::Water(on_off) => info!("Turn on water: {on_off}"),
-                Command::Lamp(percent) => info!("Set lamp dim to: {percent}"),
-                Command::ReadSoilMoisture => {
-                    if let Ok(mut mqtt) = mqtt_client.lock() {
-                        match soil_moisture.to_json() {
-                            Some(msg) => mqtt.safe_message(msg),
-                            None => mqtt
-                                .error_message("soil moisture sensor is not connected".to_string()),
-                        }
-                    }
-                }
-                Command::ReadBarometer => {
-                    if let Ok(mut mqtt) = mqtt_client.lock() {
-                        match bme280_rs.as_mut() {
-                            Ok(bme280) => match bme280.to_json() {
-                                Some(msg) => mqtt.safe_message(msg),
-                                None => mqtt.error_message(
-                                    "soil moisture sensor is not connected".to_string(),
-                                ),
-                            },
-                            Err(e) => {
-                                error!("Error with bme280 driver: {:?}", e);
-                                mqtt.error_message("Bme280 sensor is not connected".to_string());
-                            }
-                        }
-                    }
-                }
-                Command::AllSemorData => {
-                    todo!("implement all sensor data")
-                }
-            }
-        });
-        let _error_sub = event_loop.subscribe(move |err: &SimplCommandError| {
-            if let Ok(mut mqtt) = mqtt_err.lock() {
-                match err {
-                    SimplCommandError::InvalidValue => {
-                        mqtt.error_message("Missing or wrong value".to_string());
-                    }
-                    SimplCommandError::JsonParseError => {
-                        mqtt.error_message("Invalid Json".to_string());
-                    }
-                    SimplCommandError::ParseError => {
-                        mqtt.error_message("Invalid encoding ( utf8 parsing failed )".to_string());
-                    }
-                    SimplCommandError::WrongCommand => {
-                        mqtt.error_message("Unknown command".to_string());
-                    }
-                };
-            }
-        });
-
-        info!("Ready for action!");
-        event_loop.spin(None)?;
-    }
-    // do not deallocate the event_loop after main() returns
-    // core::mem::forget(event_loop);
+    warn!("Tasks completed");
 
     Ok(())
 }

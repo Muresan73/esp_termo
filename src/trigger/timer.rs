@@ -45,6 +45,14 @@ pub fn get_timer() -> Result<AsyncTimerService<EspTimerService<esp_idf_svc::time
     Ok(timer)
 }
 
+pub async fn safe_sleep(duration: Duration) {
+    if let Ok(ts) = get_timer() {
+        if let Ok(mut sleep) = ts.timer() {
+            sleep.after(duration).await.ok();
+        }
+    }
+}
+
 pub fn showtime() {
     let now = Local::now();
 
